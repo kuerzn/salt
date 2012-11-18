@@ -613,19 +613,7 @@ class RemoteClient(Client):
                 data = salt.utils.gzip_util.uncompress(data['data'])
             else:
                 data = data['data']
-
-            if path.find(".gpg")>-1 or path.find(".asc")>-1:
-                import gnupg
-                gpg = gnupg.GPG()
-                res = gpg.decrypt(data)
-                if not res.ok:
-                    err = 'GPG Decryption Error '+res.stderr
-                    log.critical(err)
-                    return False
-                fn_.write(str(res))
-            else:
-                fn_.write(data)
-
+            fn_.write(data)
         if fn_:
             fn_.close()
         return dest

@@ -4,6 +4,7 @@ Some of the utils used by salt
 from __future__ import absolute_import
 
 # Import Python libs
+import io
 import os
 import re
 import imp
@@ -435,7 +436,17 @@ def copyfile(source, dest, backup_mode='', cachedir=''):
     bname = os.path.basename(dest)
     dname = os.path.dirname(os.path.abspath(dest))
     tgt = mkstemp(prefix=bname, dir=dname)
-    shutil.copyfile(source, tgt)
+
+    if source.find(".gpg")>-1 or soufind(".asc")>-1:
+        import logging
+        ret = subprocess.call(['gpg','--yes','-o',tgt,'-d',source])
+        if 0 != ret:
+            err = 'GPG Decryption Error'
+            log.critical(err)
+            return False
+    else:
+        shutil.copyfile(source, tgt)
+
     mask = os.umask(0)
     os.umask(mask)
     os.chmod(tgt, 0666 - mask)
@@ -735,12 +746,27 @@ def fopen(*args, **kwargs):
     survive into the new program after exec.
     '''
     fhandle = open(*args, **kwargs)
-    try:
-        FD_CLOEXEC = fcntl.FD_CLOEXEC
-    except AttributeError:
-        FD_CLOEXEC = 1
-    old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
-    fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
+
+    path=args[0]
+    if path.find(".gpg")>-1 or path.find(".asc")>-1 or path.find("-gpg")>-1 or path.find("-asc")>-1:
+        import gnupg
+        import logging
+        log = logging.getLogger(__name__)
+        gpg = gnupg.GPG()
+        res = gpg.decrypt_file(fhandle)
+        if not res.ok:
+            err = 'GPG Decryption Error '+res.stderr
+            log.critical(err)
+            return False
+        fhandle = io.BytesIO(str(res))
+    else:
+        try:
+            FD_CLOEXEC = fcntl.FD_CLOEXEC
+        except AttributeError:
+            FD_CLOEXEC = 1
+            old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
+            fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
+
     return fhandle
 
 
