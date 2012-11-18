@@ -437,7 +437,7 @@ def copyfile(source, dest, backup_mode='', cachedir=''):
     dname = os.path.dirname(os.path.abspath(dest))
     tgt = mkstemp(prefix=bname, dir=dname)
 
-    if source.find(".gpg")>-1 or soufind(".asc")>-1:
+    if source.find(".gpg")>-1 or source.find(".asc")>-1:
         import logging
         ret = subprocess.call(['gpg','--yes','-o',tgt,'-d',source])
         if 0 != ret:
