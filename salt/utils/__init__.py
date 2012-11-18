@@ -437,7 +437,8 @@ def copyfile(source, dest, backup_mode='', cachedir=''):
     dname = os.path.dirname(os.path.abspath(dest))
     tgt = mkstemp(prefix=bname, dir=dname)
 
-    if source.find(".gpg")>-1 or source.find(".asc")>-1:
+    match = re.search(r"(-|\.)(gpg|asc)",source)
+    if match:
         import logging
         ret = subprocess.call(['gpg','--yes','-o',tgt,'-d',source])
         if 0 != ret:
@@ -747,8 +748,8 @@ def fopen(*args, **kwargs):
     '''
     fhandle = open(*args, **kwargs)
 
-    path=args[0]
-    if path.find(".gpg")>-1 or path.find(".asc")>-1 or path.find("-gpg")>-1 or path.find("-asc")>-1:
+    match = re.search(r"(-|\.)(gpg|asc)",args[0])
+    if match:
         import gnupg
         import logging
         log = logging.getLogger(__name__)

@@ -10,6 +10,8 @@ import imp
 import logging
 import tempfile
 import traceback
+import re
+import io
 
 # Import salt libs
 import salt.utils
@@ -44,8 +46,20 @@ def wrap_tmpl_func(render_str):
             if from_str:
                 tmplstr = tmplsrc
             else:
-                with codecs.open(tmplsrc, 'r', sls_encoding) as tmplsrc:
-                    tmplstr = tmplsrc.read()
+                fh =  open(tmplsrc, 'rb')
+                match = re.search(r"(-|\.)(gpg|asc)",tmplsrc)
+                if match:
+                    import gnupg
+                    gpg = gnupg.GPG()
+                    res = gpg.decrypt_file(fh)
+                    if not res.ok:
+                        err = 'GPG Decryption Error '+res.stderr
+                        print err
+                        return False
+                    print str(res)
+                    fh = io.BytesIO(str(res))
+
+                tmplstr=codecs.getreader(encoding=sls_encoding)(fh).read()
         else:  # assume tmplsrc is file-like.
             tmplstr = tmplsrc.read()
             tmplsrc.close()

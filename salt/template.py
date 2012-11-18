@@ -5,6 +5,8 @@ Manage basic template commands
 # Import python libs
 import time
 import os
+import re
+import io
 import codecs
 from cStringIO import StringIO as cStringIO
 from StringIO import StringIO as pyStringIO
@@ -46,15 +48,16 @@ def compile_template(template, renderers, default, env='', sls=''):
     render_pipe = template_shebang(template, renderers, default)
 
     with open(template, 'r') as fp_:
-        if template.find("-gpg")>-1 or template.find("-asc")>-1:
+        match = re.search(r"(-|\.)(gpg|asc)",template)
+        if match:
             import gnupg
             gpg = gnupg.GPG()
             res = gpg.decrypt_file(fp_)
             if not res.ok:
                 err = 'GPG Decryption Error '+res.stderr
-                log.critical(err)
+                print err
                 return False
-            fp_ = StringIO(str(res))
+            fp_ = io.BytesIO(str(res))
 
         input_data=codecs.getreader(encoding=sls_encoding)(fp_).read()
         if not input_data.strip():
