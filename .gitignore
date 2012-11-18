@@ -30,3 +30,7 @@ coverage.xml
 htmlcov/
 /.project
 /.pydevproject
+\#*#
+*~
+*.swp
+.#*
