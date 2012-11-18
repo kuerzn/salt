@@ -63,7 +63,7 @@ def compile_template(template, renderers, default, env='', sls=''):
 
     input_data = StringIO(input_data)
     for render, argline in render_pipe:
-        render_kwargs = dict(renderers=renderers, slspath=template)
+        render_kwargs = dict(renderers=renderers, tmplpath=template)
         if argline:
             render_kwargs['argline'] = argline
         ret = render(input_data, env, sls, **render_kwargs)

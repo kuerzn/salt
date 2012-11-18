@@ -2,7 +2,13 @@
 Return config information
 '''
 
+import logging
+import os
 import re
+from pprint import pformat
+from types import StringTypes
+
+log = logging.getLogger(__name__)
 
 # Set up the default values for all systems
 defaults = {'mongo.db': 'salt',
