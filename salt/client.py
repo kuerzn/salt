@@ -28,12 +28,13 @@ The data structure needs to be:
 # small, and only start with the ability to execute salt commands locally.
 # This means that the primary client to build is, the LocalClient
 
+# Import python libs
 import os
 import glob
 import time
 import getpass
 
-# Import salt modules
+# Import salt libs
 import salt.config
 import salt.payload
 import salt.utils
@@ -284,7 +285,10 @@ class LocalClient(object):
         else:
             for fn_ret in self.get_iter_returns(pub_data['jid'],
                     pub_data['minions'],
-                    timeout):
+                    timeout or self.opts['timeout'],
+                    tgt,
+                    expr_form,
+                    **kwargs):
                 if not fn_ret:
                     continue
                 yield fn_ret
@@ -445,7 +449,14 @@ class LocalClient(object):
                 break
             time.sleep(0.01)
 
-    def get_iter_returns(self, jid, minions, timeout=None):
+    def get_iter_returns(
+            self,
+            jid,
+            minions,
+            timeout=None,
+            tgt='*',
+            tgt_type='glob',
+            **kwargs):
         '''
         Watch the event system and return job data as it comes in
         '''

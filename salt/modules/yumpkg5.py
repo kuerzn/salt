@@ -71,7 +71,7 @@ def available_version(name):
 
         salt '*' pkg.available_version <package name>
     '''
-    out = _parse_yum('list updates {0}'.format(name))
+    out = _parse_yum('list update {0}'.format(name))
     return out[0].version if out else ''
 
 
@@ -94,9 +94,9 @@ def version(name):
 
         salt '*' pkg.version <package name>
     '''
-    pkgs = list_pkgs()
-    if name in pkgs:
-        return pkgs[name]
+    out = _parse_yum('list installed {0}'.format(name))
+    if out:
+        return out[0].version
     else:
         return ''
 
@@ -206,7 +206,9 @@ def install(name=None, refresh=False, repo='', skip_verify=False, pkgs=None,
         pkg=' '.join(pkg_params),
     )
     old = list_pkgs()
-    __salt__['cmd.retcode'](cmd)
+    stderr = __salt__['cmd.run_all'](cmd).get('stderr','')
+    if stderr:
+        log.error(stderr)
     new = list_pkgs()
     return __salt__['pkg_resource.find_changes'](old,new)
 
