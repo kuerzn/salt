@@ -22,8 +22,9 @@ import salt.config
 import salt.master
 import salt.minion
 import salt.runner
+from salt.utils import get_colors
 from salt.utils.verify import verify_env
-from saltunittest import TestCase
+from saltunittest import TestCase, RedirectStdStreams
 
 try:
     import console
@@ -55,7 +56,6 @@ SYS_TMP_DIR = tempfile.gettempdir()
 TMP = os.path.join(SYS_TMP_DIR, 'salt-tests-tmpdir')
 FILES = os.path.join(INTEGRATION_TEST_DIR, 'files')
 MOCKBIN = os.path.join(INTEGRATION_TEST_DIR, 'mockbin')
-MINIONS_CONNECT_TIMEOUT = MINIONS_SYNC_TIMEOUT = 60
 
 
 def print_header(header, sep='~', top=True, bottom=True, inline=False,
@@ -127,10 +127,11 @@ class TestDaemon(object):
     '''
     Set up the master and minion daemons, and run related cases
     '''
+    MINIONS_CONNECT_TIMEOUT = MINIONS_SYNC_TIMEOUT = 60
 
     def __init__(self, opts=None):
         self.opts = opts
-        self.clean = opts.clean
+        self.colors = get_colors(opts.no_colors is False)
 
     def __enter__(self):
         '''
@@ -249,33 +250,9 @@ class TestDaemon(object):
             os.path.join(INTEGRATION_TEST_DIR, 'files', 'conf', 'master')
         )
 
-        evt_minions_connect = multiprocessing.Event()
-        evt_minions_sync = multiprocessing.Event()
-        minion_targets = set(['minion', 'sub_minion'])
-
-        # Wait for minions to connect back
-        wait_minions_connection = multiprocessing.Process(
-            target=self.__wait_for_minions_connections,
-            args=(evt_minions_connect, minion_targets)
-        )
-        wait_minions_connection.start()
-        if evt_minions_connect.wait(MINIONS_CONNECT_TIMEOUT) is False:
-            print('WARNING: Minions failed to connect back. Tests requiring '
-                  'them WILL fail')
-        wait_minions_connection.terminate()
-        del(evt_minions_connect, wait_minions_connection)
-
-        # Wait for minions to "sync_all"
-        sync_minions = multiprocessing.Process(
-            target=self.__sync_minions,
-            args=(evt_minions_sync, minion_targets)
-        )
-        sync_minions.start()
-        if evt_minions_sync.wait(MINIONS_SYNC_TIMEOUT) is False:
-            print('WARNING: Minions failed to sync. Tests requiring the '
-                  'testing `runtests_helper` module WILL fail')
-        sync_minions.terminate()
-        del(evt_minions_sync, sync_minions)
+        self.minion_targets = set(['minion', 'sub_minion'])
+        self.pre_setup_minions()
+        self.setup_minions()
 
         if self.opts.sysinfo:
             from salt import version
@@ -291,7 +268,10 @@ class TestDaemon(object):
 
         print_header('', sep='=', inline=True)
 
-        return self
+        try:
+            return self
+        finally:
+            self.post_setup_minions()
 
     def __exit__(self, type, value, traceback):
         '''
@@ -304,6 +284,43 @@ class TestDaemon(object):
         self.smaster_process.terminate()
         self._exit_mockbin()
         self._clean()
+
+    def pre_setup_minions(self):
+        """
+        Subclass this method for additional minion setups.
+        """
+
+    def setup_minions(self):
+        # Wait for minions to connect back
+        wait_minion_connections = multiprocessing.Process(
+            target=self.wait_for_minion_connections,
+            args=(self.minion_targets, self.MINIONS_CONNECT_TIMEOUT)
+        )
+        wait_minion_connections.start()
+        wait_minion_connections.join()
+        wait_minion_connections.terminate()
+        if wait_minion_connections.exitcode > 0:
+            return False
+
+        del(wait_minion_connections)
+
+        # Wait for minions to "sync_all"
+        sync_minions = multiprocessing.Process(
+            target=self.sync_minions,
+            args=(self.minion_targets, self.MINIONS_SYNC_TIMEOUT)
+        )
+        sync_minions.start()
+        sync_minions.join()
+        if sync_minions.exitcode > 0:
+            return False
+        sync_minions.terminate()
+        del(sync_minions)
+        return True
+
+    def post_setup_minions(self):
+        """
+        Subclass this method to execute code after the minions have been setup
+        """
 
     def _enter_mockbin(self):
         path = os.environ.get('PATH', '')
@@ -325,7 +342,7 @@ class TestDaemon(object):
         '''
         Clean out the tmp files
         '''
-        if not self.clean:
+        if not self.opts.clean:
             return
         if os.path.isdir(self.sub_minion_opts['root_dir']):
             shutil.rmtree(self.sub_minion_opts['root_dir'])
@@ -337,26 +354,37 @@ class TestDaemon(object):
             shutil.rmtree(TMP)
 
     def wait_for_jid(self, targets, jid, timeout=120):
+        time.sleep(1)  # Allow some time for minions to accept jobs
         now = datetime.now()
         expire = now + timedelta(seconds=timeout)
+        job_finished = False
         while now <= expire:
             running = self.__client_job_running(targets, jid)
             sys.stdout.write('\r' + ' ' * PNUM + '\r')
-            if not running:
-                print
+            if not running and job_finished is False:
+                # Let's not have false positives and wait one more seconds
+                job_finished = True
+            elif not running and job_finished is True:
                 return True
-            sys.stdout.write(
-                '    * [Quit in {0}] Waiting for {1}'.format(
-                    '{0}'.format(expire - now).rsplit('.', 1)[0],
-                    ', '.join(running)
+            elif running and job_finished is True:
+                job_finished = False
+
+            if job_finished is False:
+                sys.stdout.write(
+                    '   * {YELLOW}[Quit in {0}]{ENDC} Waiting for {1}'.format(
+                        '{0}'.format(expire - now).rsplit('.', 1)[0],
+                        ', '.join(running),
+                        **self.colors
+                    )
                 )
-            )
-            sys.stdout.flush()
-            timeout -= 1
+                sys.stdout.flush()
             time.sleep(1)
             now = datetime.now()
         else:
-            sys.stdout.write('\n    * ERROR: Failed to get information back\n')
+            sys.stdout.write(
+                '\n {RED_BOLD}*{ENDC} ERROR: Failed to get information '
+                'back\n'.format(**self.colors)
+            )
             sys.stdout.flush()
         return False
 
@@ -368,35 +396,71 @@ class TestDaemon(object):
             k for (k, v) in running.iteritems() if v and v[0]['jid'] == jid
         ]
 
-    def __wait_for_minions_connections(self, evt, targets):
-        print_header(
-            'Waiting at most {0} secs for local minions to connect '
-            'back and another {1} secs for them to '
-            '"saltutil.sync_all()"'.format(
-                MINIONS_CONNECT_TIMEOUT, MINIONS_SYNC_TIMEOUT
-            ), sep='=', centered=True
+    def wait_for_minion_connections(self, targets, timeout):
+        sys.stdout.write(
+            ' {LIGHT_BLUE}*{ENDC} Waiting at most {0} for minions({1}) to '
+            'connect back\n'.format(
+                (timeout > 60 and
+                 timedelta(seconds=timeout) or
+                 '{0} secs'.format(timeout)),
+                ', '.join(targets),
+                **self.colors
+            )
         )
-        targets = set(['minion', 'sub_minion'])
+        sys.stdout.flush()
         expected_connections = set(targets)
-        while True:
-            # If enough time passes, a timeout will be triggered by
-            # multiprocessing.Event, so, we can have this while True here
-            targets = self.client.cmd('*', 'test.ping')
-            for target in targets:
+        now = datetime.now()
+        expire = now + timedelta(seconds=timeout)
+        while now <= expire:
+            sys.stdout.write('\r' + ' ' * PNUM + '\r')
+            sys.stdout.write(
+                ' * {YELLOW}[Quit in {0}]{ENDC} Waiting for {1}'.format(
+                    '{0}'.format(expire - now).rsplit('.', 1)[0],
+                    ', '.join(expected_connections),
+                    **self.colors
+                )
+            )
+            sys.stdout.flush()
+
+            responses = self.client.cmd(
+                ','.join(expected_connections), 'test.ping', expr_form='list',
+            )
+            for target in responses:
                 if target not in expected_connections:
                     # Someone(minion) else "listening"?
+                    print target
                     continue
                 expected_connections.remove(target)
-                print('  * {0} minion connected'.format(target))
-            if not expected_connections:
-                # All expected connections have connected
-                break
-            time.sleep(1)
-        evt.set()
+                sys.stdout.write('\r' + ' ' * PNUM + '\r')
+                sys.stdout.write(
+                    '   {LIGHT_GREEN}*{ENDC} {0} connected.\n'.format(
+                        target, **self.colors
+                    )
+                )
+                sys.stdout.flush()
 
-    def __sync_minions(self, evt, targets):
+            if not expected_connections:
+                return
+
+            time.sleep(1)
+            now = datetime.now()
+        else:
+            print(
+                '\n {RED_BOLD}*{ENDC} WARNING: Minions failed to connect '
+                'back. Tests requiring them WILL fail'.format(**self.colors)
+            )
+            print_header('=', sep='=', inline=True)
+            raise SystemExit()
+
+    def sync_minions(self, targets, timeout=120):
         # Let's sync all connected minions
-        print('  * Syncing local minion\'s dynamic data(saltutil.sync_all)')
+        print(
+            ' {LIGHT_BLUE}*{ENDC} Syncing minion\'s dynamic '
+            'data(saltutil.sync_all)'.format(
+                ', '.join(targets),
+                **self.colors
+            )
+        )
         syncing = set(targets)
         jid_info = self.client.run_job(
             ','.join(targets), 'saltutil.sync_all',
@@ -404,23 +468,33 @@ class TestDaemon(object):
             timeout=9999999999999999,
         )
 
-        if self.wait_for_jid(targets, jid_info['jid']) is False:
-            evt.set()
-            return
+        if self.wait_for_jid(targets, jid_info['jid'], timeout) is False:
+            print(
+                ' {RED_BOLD}*{ENDC} WARNING: Minions failed to sync. Tests '
+                'requiring custom modules WILL fail'.format(**self.colors)
+            )
+            raise SystemExit()
 
         while syncing:
             rdata = self.client.get_returns(jid_info['jid'], syncing, 1)
             if rdata:
-                for idx, (name, output) in enumerate(rdata.iteritems()):
-                    print('    * Synced {0}: {1}'.format(name, output))
+                for name, output in rdata.iteritems():
+                    print(
+                        '   {LIGHT_GREEN}*{ENDC} Synced {0}: modules=>{1} '
+                        'states=>{2} grains=>{3} renderers=>{4} '
+                        'returners=>{5}'.format(
+                            name, *output, **self.colors
+                        )
+                    )
                     # Synced!
                     try:
                         syncing.remove(name)
                     except KeyError:
-                        print('    * {0} already synced???  {1}'.format(
-                            name, output
-                        ))
-        evt.set()
+                        print(
+                            ' {RED_BOLD}*{ENDC} {0} already synced??? '
+                            '{1}'.format(name, output, **self.colors)
+                        )
+        return True
 
 
 class ModuleCase(TestCase):
@@ -639,8 +713,9 @@ class ShellCase(TestCase):
             os.path.join(INTEGRATION_TEST_DIR, 'files', 'conf', 'master')
         )
         opts.update({'doc': False, 'fun': fun, 'arg': arg})
-        runner = salt.runner.Runner(opts)
-        ret['fun'] = runner.run()
+        with RedirectStdStreams():
+            runner = salt.runner.Runner(opts)
+            ret['fun'] = runner.run()
         return ret
 
     def run_key(self, arg_str, catch_stderr=False):
@@ -694,3 +769,61 @@ class ShellCaseCommonTestsMixIn(object):
         out = '\n'.join(self.run_script(self._call_binary_, "--version"))
         self.assertIn(self._call_binary_, out)
         self.assertIn(salt.__version__, out)
+
+
+class SaltReturnAssertsMixIn(object):
+
+    def assertReturnSaltType(self, ret):
+        try:
+            self.assertTrue(isinstance(ret, dict))
+        except AssertionError:
+            raise AssertionError(
+                '{0} is not dict. Salt returned: {1}'.format(
+                    type(ret).__name__, ret
+                )
+            )
+
+    def assertReturnNonEmptySaltType(self, ret):
+        self.assertReturnSaltType(ret)
+        try:
+            self.assertNotEqual(ret, {})
+        except AssertionError:
+            raise AssertionError(
+                '{} is equal to {}. Salt returned an empty dictionary.'
+            )
+
+    def __assertReturn(self, ret, which_case):
+        self.assertReturnNonEmptySaltType(ret)
+
+        for part in ret.itervalues():
+            self.assertReturnNonEmptySaltType(part)
+            try:
+                self.assertTrue(isinstance(part, dict))
+            except AssertionError:
+                raise AssertionError(
+                    '{0} is not dict. Salt returned: {1}'.format(
+                        type(part), part
+                    )
+                )
+            try:
+                if which_case is True:
+                    self.assertTrue(part['result'])
+                elif which_case is False:
+                    self.assertFalse(part['result'])
+                elif which_case is None:
+                    self.assertIsNone(part['result'])
+            except AssertionError:
+                raise AssertionError(
+                    '{result} is not {0}. Salt Comment:\n{comment}'.format(
+                        which_case, **part
+                    )
+                )
+
+    def assertSaltTrueReturn(self, ret):
+        self.__assertReturn(ret, True)
+
+    def assertSaltFalseReturn(self, ret):
+        self.__assertReturn(ret, False)
+
+    def assertSaltNoneReturn(self, ret):
+        self.__assertReturn(ret, None)

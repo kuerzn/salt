@@ -498,7 +498,7 @@ class State(object):
             if 'order' in chunk:
                 if not isinstance(chunk['order'], int):
                     continue
-                if chunk['order'] > cap - 1:
+                if chunk['order'] > cap - 1 and chunk['order'] > 0:
                     cap = chunk['order'] + 100
         for chunk in chunks:
             if not 'order' in chunk:
@@ -506,9 +506,11 @@ class State(object):
             else:
                 if not isinstance(chunk['order'], int):
                     if chunk['order'] == 'last':
-                        chunk['order'] = cap + 100
+                        chunk['order'] = cap + 1000000
                     else:
                         chunk['order'] = cap
+                elif isinstance(chunk['order'], int) and chunk['order'] < 0:
+                    chunk['order'] = cap + 1000000 + chunk['order']
         chunks = sorted(
                 chunks,
                 key=lambda k: '{0[state]}{0[name]}{0[fun]}'.format(k)
@@ -1056,6 +1058,7 @@ class State(object):
         elif status == 'change':
             ret = self.call(low)
             if not ret['changes']:
+                low = low.copy()
                 low['sfun'] = low['fun']
                 low['fun'] = 'mod_watch'
                 ret = self.call(low)
@@ -1441,7 +1444,7 @@ class BaseHighState(object):
         faux = {'state': 'file', 'fun': 'recurse'}
         self.state.module_refresh(faux)
 
-    def render_state(self, sls, env, mods):
+    def render_state(self, sls, env, mods, matches):
         '''
         Render a state file and retrieve all of the include states
         '''
@@ -1472,21 +1475,58 @@ class BaseHighState(object):
                         errors.append(err)
                     else:
                         for inc_sls in state.pop('include'):
-                            if fnmatch.filter(self.avail[env], inc_sls):
+                            # inc_sls may take the form of:
+                            #   'sls.to.include' <- same as {<env>: 'sls.to.include'}
+                            #   {<env_key>: 'sls.to.include'}
+                            #   {'_xenv': 'sls.to.resolve'}
+                            XENV_KEY = '_xenv'
+
+                            if isinstance(inc_sls, dict):
+                                env_key, inc_sls = inc_sls.popitem()
+                            else:
+                                env_key = env
+
+                            if env_key != XENV_KEY:
+                                # Resolve inc_sls in the specified environment
+                                if env_key in matches and fnmatch.filter(self.avail[env_key], inc_sls):
+                                    resolved_envs = [env_key]
+                                else:
+                                    resolved_envs = []
+                            else:
+                                # Resolve inc_sls in the subset of environment matches
+                                resolved_envs = [
+                                    aenv for aenv in matches
+                                    if fnmatch.filter(self.avail[aenv], inc_sls)
+                                ]
+
+                            # An include must be resolved to a single environment, or
+                            # the include must exist in the current environment
+                            if len(resolved_envs) == 1 or env in resolved_envs:
                                 if inc_sls not in mods:
                                     nstate, mods, err = self.render_state(
-                                            inc_sls,
-                                            env,
-                                            mods
-                                            )
+                                        inc_sls,
+                                        resolved_envs[0] if len(resolved_envs) == 1 else env,
+                                        mods,
+                                        matches
+                                    )
                                 if nstate:
                                     state.update(nstate)
                                 if err:
                                     errors += err
                             else:
-                                msg = ('Specified SLS {0} in environment {1} '
-                                       'is not available on the salt master'
-                                       ).format(inc_sls, env)
+                                msg = ''
+                                if not resolved_envs:
+                                    msg = ('Unknown include: Specified SLS {0}: {1} is not available on the salt '
+                                           'master in environment(s): {2} '
+                                           ).format(env_key,
+                                                    inc_sls,
+                                                    ', '.join(matches) if env_key == XENV_KEY else env_key)
+                                elif len(resolved_envs) > 1:
+                                    msg = ('Ambiguous include: Specified SLS {0}: {1} is available on the salt master '
+                                           'in multiple available environments: {2}'
+                                           ).format(env_key,
+                                                    inc_sls,
+                                                    ', '.join(resolved_envs))
                                 log.error(msg)
                                 if self.opts['failhard']:
                                     errors.append(msg)
@@ -1592,7 +1632,7 @@ class BaseHighState(object):
             mods = set()
             for sls_match in states:
                 for sls in fnmatch.filter(self.avail[env], sls_match):
-                    state, mods, err = self.render_state(sls, env, mods)
+                    state, mods, err = self.render_state(sls, env, mods, matches)
                     # The extend members can not be treated as globally unique:
                     if '__extend__' in state and '__extend__' in highstate:
                         highstate['__extend__'].extend(state.pop('__extend__'))
