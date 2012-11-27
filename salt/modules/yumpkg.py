@@ -14,8 +14,6 @@ except (ImportError, AttributeError):
     has_yumdeps = False
 
 import logging
-import os
-import re
 
 log = logging.getLogger(__name__)
 
@@ -177,7 +175,18 @@ def version(name):
 
         salt '*' pkg.version <package name>
     '''
-    pkgs = list_pkgs(name)
+    # since list_pkgs is used to support matching complex versions
+    # we can search for a digit in the name and if one doesn't exist
+    # then just use the dbMatch function, which is 1000 times quicker
+    m = re.search("[0-9]", name)
+    if m:
+        pkgs = list_pkgs(name)
+    else:
+        ts = rpm.TransactionSet()
+        mi = ts.dbMatch('name', name)
+        pkgs = {}
+        for h in mi:
+            pkgs[h['name']] = "-".join([h['version'], h['release']])
     if name in pkgs:
         return pkgs[name]
     else:
@@ -282,8 +291,9 @@ def install(name=None, refresh=False, repo='', skip_verify=False, pkgs=None,
             salt '*' pkg.install pkgs='["foo","bar"]'
 
     sources
-        A list of RPM sources to use for installing the package(s) defined in
-        pkgs. Must be passed as a list of dicts.
+        A list of RPM packages to install. Must be passed as a list of dicts,
+        with the keys being package names, and the values being the source URI
+        or local path to the package.
 
         CLI Example::
             salt '*' pkg.install sources='[{"foo": "salt://foo.rpm"},{"bar": "salt://bar.rpm"}]'

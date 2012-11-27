@@ -24,6 +24,12 @@ import time
 import platform
 from calendar import month_abbr as months
 
+try:
+    import fcntl
+except ImportError:
+    # fcntl is not available on windows
+    fcntl = None
+
 # Import Salt libs
 import salt.minion
 import salt.payload
@@ -761,12 +767,15 @@ def fopen(*args, **kwargs):
             return False
         fhandle = io.BytesIO(str(res))
     else:
+        if fcntl is None:
+            # fcntl is not available on windows
+            return fhandle
         try:
             FD_CLOEXEC = fcntl.FD_CLOEXEC
         except AttributeError:
             FD_CLOEXEC = 1
-            old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
-            fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
+        old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
+        fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
 
     return fhandle
 
