@@ -5,9 +5,11 @@ import shutil
 # Import salt libs
 import salt.utils
 import integration
+from saltunittest import skipIf
 
 
-class StateModuleTest(integration.ModuleCase):
+class StateModuleTest(integration.ModuleCase,
+                      integration.SaltReturnAssertsMixIn):
     '''
     Validate the test module
     '''
@@ -61,37 +63,13 @@ class StateModuleTest(integration.ModuleCase):
             os.unlink(testfile)
 
         ret = self.run_function('state.sls', mods='testappend')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        self.assertSaltTrueReturn(ret)
 
         ret = self.run_function('state.sls', mods='testappend.step-1')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        self.assertSaltTrueReturn(ret)
 
         ret = self.run_function('state.sls', mods='testappend.step-2')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        self.assertSaltTrueReturn(ret)
 
         self.assertMultiLineEqual('''\
 # set variable identifying the chroot you work in (used in the prompt below)
@@ -107,26 +85,10 @@ fi
 
         # Re-append switching order
         ret = self.run_function('state.sls', mods='testappend.step-2')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        self.assertSaltTrueReturn(ret)
 
         ret = self.run_function('state.sls', mods='testappend.step-1')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        self.assertSaltTrueReturn(ret)
 
         self.assertMultiLineEqual('''\
 # set variable identifying the chroot you work in (used in the prompt below)
@@ -179,40 +141,20 @@ fi
             os.unlink(testfile)
 
         # Create the file
-        ret = self.run_function('state.sls', mods='issue-1879')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        ret = self.run_function('state.sls', mods='issue-1879', timeout=120)
+        self.assertSaltTrueReturn(ret)
 
         # The first append
-        ret = self.run_function('state.sls', mods='issue-1879.step-1')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        ret = self.run_function(
+            'state.sls', mods='issue-1879.step-1', timeout=120
+        )
+        self.assertSaltTrueReturn(ret)
 
         # The second append
-        ret = self.run_function('state.sls', mods='issue-1879.step-2')
-        try:
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
-        except AssertionError:
-            print ret
-            raise
+        ret = self.run_function(
+            'state.sls', mods='issue-1879.step-2', timeout=120
+        )
+        self.assertSaltTrueReturn(ret)
 
         # Does it match?
         try:
@@ -221,24 +163,15 @@ fi
                 salt.utils.fopen(testfile, 'r').read()
             )
             # Make sure we don't re-append existing text
-            ret = self.run_function('state.sls', mods='issue-1879.step-1')
-            try:
-                self.assertTrue(isinstance(ret, dict)), ret
-                self.assertNotEqual(ret, {})
-                for key in ret.iterkeys():
-                    self.assertTrue(ret[key]['result'])
-            except AssertionError:
-                print ret
-                raise
-            ret = self.run_function('state.sls', mods='issue-1879.step-2')
-            try:
-                self.assertTrue(isinstance(ret, dict)), ret
-                self.assertNotEqual(ret, {})
-                for key in ret.iterkeys():
-                    self.assertTrue(ret[key]['result'])
-            except AssertionError:
-                print ret
-                raise
+            ret = self.run_function(
+                'state.sls', mods='issue-1879.step-1', timeout=120
+            )
+            self.assertSaltTrueReturn(ret)
+
+            ret = self.run_function(
+                'state.sls', mods='issue-1879.step-2', timeout=120
+            )
+            self.assertSaltTrueReturn(ret)
             self.assertMultiLineEqual(
                 contents,
                 salt.utils.fopen(testfile, 'r').read()
@@ -261,8 +194,8 @@ fi
         )
         try:
             ret = self.run_function('state.sls', mods='include-test')
-            for part in ret.itervalues():
-                self.assertTrue(part['result'])
+            self.assertSaltTrueReturn(ret)
+
             for fname in fnames:
                 self.assertTrue(os.path.isfile(fname))
             self.assertFalse(os.path.isfile(exclude_test_file))
@@ -281,8 +214,8 @@ fi
         )
         try:
             ret = self.run_function('state.sls', mods='exclude-test')
-            for part in ret.itervalues():
-                self.assertTrue(part['result'])
+            self.assertSaltTrueReturn(ret)
+
             for fname in fnames:
                 self.assertTrue(os.path.isfile(fname))
             self.assertFalse(os.path.isfile(to_include_test_file))
@@ -290,20 +223,21 @@ fi
             for fname in list(fnames) + [to_include_test_file]:
                 if os.path.isfile(fname):
                     os.remove(fname)
-
+    
     def test_issue_2068_template_str(self):
+        ret = self.run_function('cmd.has_exec', ['virtualenv'])
+        if not ret:
+            self.skipTest('virtualenv not installed')
         venv_dir = os.path.join(
             integration.SYS_TMP_DIR, 'issue-2068-template-str'
         )
 
         try:
             ret = self.run_function(
-                'state.sls', mods='issue-2068-template-str-no-dot'
+                'state.sls', mods='issue-2068-template-str-no-dot',
+                timeout=120
             )
-            self.assertTrue(isinstance(ret, dict))
-            self.assertNotEqual(ret, {})
-            for part in ret.itervalues():
-                self.assertTrue(part['result'])
+            self.assertSaltTrueReturn(ret)
         finally:
             if os.path.isdir(venv_dir):
                 shutil.rmtree(venv_dir)
@@ -317,13 +251,10 @@ fi
 
         template = salt.utils.fopen(template_path, 'r').read()
         try:
-            ret = self.run_function('state.template_str', [template])
-
-            self.assertTrue(isinstance(ret, dict))
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
+            ret = self.run_function(
+                'state.template_str', [template], timeout=120
+            )
+            self.assertSaltTrueReturn(ret)
 
             self.assertTrue(
                 os.path.isfile(os.path.join(venv_dir, 'bin', 'pep8'))
@@ -334,11 +265,10 @@ fi
 
         # Now using state.template
         try:
-            ret = self.run_function('state.template', [template_path])
-            self.assertTrue(isinstance(ret, dict))
-            self.assertNotEqual(ret, {})
-            for part in ret.itervalues():
-                self.assertTrue(part['result'])
+            ret = self.run_function(
+                'state.template', [template_path], timeout=120
+            )
+            self.assertSaltTrueReturn(ret)
         finally:
             if os.path.isdir(venv_dir):
                 shutil.rmtree(venv_dir)
@@ -346,12 +276,9 @@ fi
         # Now the problematic #2068 including dot's
         try:
             ret = self.run_function(
-                'state.sls', mods='issue-2068-template-str'
+                'state.sls', mods='issue-2068-template-str', timeout=120
             )
-            self.assertTrue(isinstance(ret, dict))
-            self.assertNotEqual(ret, {})
-            for part in ret.itervalues():
-                self.assertTrue(part['result'])
+            self.assertSaltTrueReturn(ret)
         finally:
             if os.path.isdir(venv_dir):
                 shutil.rmtree(venv_dir)
@@ -365,13 +292,10 @@ fi
 
         template = salt.utils.fopen(template_path, 'r').read()
         try:
-            ret = self.run_function('state.template_str', [template])
-
-            self.assertTrue(isinstance(ret, dict)), ret
-            self.assertNotEqual(ret, {})
-
-            for key in ret.iterkeys():
-                self.assertTrue(ret[key]['result'])
+            ret = self.run_function(
+                'state.template_str', [template], timeout=120
+            )
+            self.assertSaltTrueReturn(ret)
 
             self.assertTrue(
                 os.path.isfile(os.path.join(venv_dir, 'bin', 'pep8'))
@@ -382,11 +306,10 @@ fi
 
         # Now using state.template
         try:
-            ret = self.run_function('state.template', [template_path])
-            self.assertTrue(isinstance(ret, dict))
-            self.assertNotEqual(ret, {})
-            for part in ret.itervalues():
-                self.assertTrue(part['result'])
+            ret = self.run_function(
+                'state.template', [template_path], timeout=120
+            )
+            self.assertSaltTrueReturn(ret)
         finally:
             if os.path.isdir(venv_dir):
                 shutil.rmtree(venv_dir)

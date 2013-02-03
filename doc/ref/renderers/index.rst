@@ -65,6 +65,22 @@ Other renderer combinations are possible, here's a few examples:
       This one allows you to use both jinja and mako templating syntax in the
       input and then parse the final rendererd output as YAML.
 
+And here's a contrived example sls file using the ``jinja | mako | yaml`` renderer:
+
+.. code-block:: python
+
+    #!jinja|mako|yaml
+
+    An_Example:
+      cmd.run:
+        - name: |
+            echo "Using Salt ${grains['saltversion']}" \
+                 "from path {{grains['saltpath']}}."
+        - cwd: /
+
+    <%doc> ${...} is Mako's notation, and so is this comment. </%doc>
+    {#     Similarly, {{...}} is Jinja's notation, and so is this comment. #}
+
 For backward compatibility, ``jinja | yaml``  can also be written as
 ``yaml_jinja``, and similarly, the ``yaml_mako``, ``yaml_wempy``,
 ``json_jinja``, ``json_mako``, and ``json_wempy`` renderers are all supported
@@ -82,12 +98,19 @@ accepts as input and what it returns as output.
 Writing Renderers
 -----------------
 
-Writing a renderer is easy, all that is required is that a Python module
-is placed in the rendered directory and that the module implements the
-render function. The render function will be passed the path of the SLS file.
-In the render function, parse the passed file and return the data structure
+Writing a renderer is easy, all that is required is that a Python module is
+placed in the rendered directory and that the module implements the ``render``
+function. The ``render`` function will be passed the path of the SLS file.  In
+the ``render`` function, parse the passed file and return the data structure
 derived from the file. You can place your custom renderers in a ``_renderers``
-directory in your file root (``/srv/salt/``).
+directory within the :conf_master:`file_roots` specified by the master config
+file. These custom renderers are distributed when `state.highstate`_ is run, or
+by executing the `saltutil.sync_renderers`_ or `saltutil.sync_all`_ functions.
+
+.. _`state.highstate`: https://salt.readthedocs.org/en/latest/ref/modules/all/salt.modules.state.html#salt.modules.state.highstate
+.. _`saltutil.sync_renderers`: https://salt.readthedocs.org/en/latest/ref/modules/all/salt.modules.saltutil.html#salt.modules.saltutil.sync_renderers
+.. _`saltutil.sync_all`: https://salt.readthedocs.org/en/latest/ref/modules/all/salt.modules.saltutil.html#salt.modules.saltutil.sync_all
+
 
 Examples
 --------

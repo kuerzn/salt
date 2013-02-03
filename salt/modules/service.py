@@ -2,13 +2,15 @@
 The default service module, if not otherwise specified salt will fall back
 to this basic module
 '''
-# Import Python libs
+
+# Import python libs
 import os
-# Import Salt libs
+
+# Import salt libs
 import salt.utils
 
 
-grainmap = {
+GRAINMAP = {
            'Arch': '/etc/rc.d',
            'Debian': '/etc/init.d',
            'Fedora': '/etc/init.d',
@@ -37,6 +39,7 @@ def __virtual__():
                'Ubuntu',
                'Debian',
                'Arch',
+               'ALT',
               ]
     if __grains__['os'] in disable:
         return False
@@ -54,7 +57,7 @@ def start(name):
 
         salt '*' service.start <service name>
     '''
-    cmd = os.path.join(grainmap[__grains__['os']],
+    cmd = os.path.join(GRAINMAP[__grains__['os']],
             name + ' start')
     return not __salt__['cmd.retcode'](cmd)
 
@@ -67,7 +70,7 @@ def stop(name):
 
         salt '*' service.stop <service name>
     '''
-    cmd = os.path.join(grainmap[__grains__['os']],
+    cmd = os.path.join(GRAINMAP[__grains__['os']],
             name + ' stop')
     return not __salt__['cmd.retcode'](cmd)
 
@@ -82,7 +85,7 @@ def restart(name):
     '''
     if name == 'salt-minion':
         salt.utils.daemonize_if(__opts__)
-    cmd = os.path.join(grainmap[__grains__['os']],
+    cmd = os.path.join(GRAINMAP[__grains__['os']],
             name + ' restart')
     return not __salt__['cmd.retcode'](cmd)
 
@@ -108,6 +111,6 @@ def reload(name):
 
         salt '*' service.reload <service name>
     '''
-    cmd = os.path.join(grainmap[__grains__['os']],
+    cmd = os.path.join(GRAINMAP[__grains__['os']],
             name + ' reload')
     return not __salt__['cmd.retcode'](cmd)

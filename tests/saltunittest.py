@@ -74,6 +74,7 @@ class RedirectStdStreams(object):
 
     def __enter__(self):
         self.redirect()
+        return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.unredirect()
@@ -90,13 +91,32 @@ class RedirectStdStreams(object):
     def unredirect(self):
         if not self.__redirected:
             return
+        try:
+            self.__stdout.flush()
+            self.__stdout.close()
+        except ValueError:
+            # already closed?
+            pass
+        try:
+            self.__stderr.flush()
+            self.__stderr.close()
+        except ValueError:
+            # already closed?
+            pass
 
-        self.__stdout.flush()
-        self.__stdout.close()
-        self.__stderr.flush()
-        self.__stderr.close()
         sys.stdout = self.old_stdout
         sys.stderr = self.old_stderr
+
+    def flush(self):
+        if self.__redirected:
+            try:
+                self.__stdout.flush()
+            except:
+                pass
+            try:
+                self.__stderr.flush()
+            except:
+                pass
 
 
 class TestsLoggingHandler(object):
@@ -162,3 +182,21 @@ class TestsLoggingHandler(object):
     def __exit__(self, type, value, traceback):
         self.deactivate()
         self.activated = False
+
+    # Mimic some handler attributes and methods
+    @property
+    def lock(self):
+        if self.activated:
+            return self.handler.lock
+
+    def createLock(self):
+        if self.activated:
+            return self.handler.createLock()
+
+    def acquire(self):
+        if self.activated:
+            return self.handler.acquire()
+
+    def release(self):
+        if self.activated:
+            return self.handler.release()

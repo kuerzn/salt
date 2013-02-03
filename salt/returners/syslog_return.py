@@ -3,10 +3,11 @@ Return data to the host operating system's syslog facility
 
 Required python modules: syslog, json
 
-Thi syslog returner simply reuses the operating system's syslog
+The syslog returner simply reuses the operating system's syslog
 facility to log return data
 '''
 
+# Import python libs
 import syslog
 import json
 

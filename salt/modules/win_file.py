@@ -15,12 +15,13 @@ import os.path
 import hashlib
 import logging
 
+# Import third party libs
 try:
     import win32security
     import ntsecuritycon as con
-    has_windows_modules = True
+    HAS_WINDOWS_MODULES = True
 except ImportError:
-    has_windows_modules = False
+    HAS_WINDOWS_MODULES = False
 
 # Import salt libs
 import salt.utils
@@ -34,8 +35,8 @@ def __virtual__():
     '''
     Only works on Windows systems
     '''
-    if __grains__['os'] == 'Windows':
-        if has_windows_modules:
+    if salt.utils.is_windows():
+        if HAS_WINDOWS_MODULES:
             return 'file'
         log.warn(salt.utils.required_modules_error(__file__, __doc__))
     return False
@@ -192,7 +193,7 @@ def chown(path, user, group):
         salt '*' file.chown c:\\temp\\test.txt myusername administrators
     '''
     # I think this function isn't working correctly yet
-    sd = win32security.GetFileSecurity(
+    gsd = win32security.GetFileSecurity(
         path, win32security.DACL_SECURITY_INFORMATION
     )
     uid = user_to_uid(user)
@@ -216,9 +217,9 @@ def chown(path, user, group):
         win32security.ACL_REVISION, con.FILE_ALL_ACCESS,
         win32security.GetBinarySid(gid)
     )
-    sd.SetSecurityDescriptorDacl(1, dacl, 0)
+    gsd.SetSecurityDescriptorDacl(1, dacl, 0)
     return win32security.SetFileSecurity(
-        path, win32security.DACL_SECURITY_INFORMATION, sd
+        path, win32security.DACL_SECURITY_INFORMATION, gsd
     )
 
 
@@ -258,14 +259,14 @@ def get_sum(path, form='md5'):
         return getattr(hashlib, form)(
             salt.utils.fopen(path, 'rb').read()
         ).hexdigest()
-    except (IOError, OSError) as e:
-        return 'File Error: {0}'.format(e)
-    except AttributeError as e:
+    except (IOError, OSError) as err:
+        return 'File Error: {0}'.format(err)
+    except AttributeError:
         return 'Hash {0} not supported'.format(form)
-    except NameError as e:
+    except NameError:
         return 'Hashlib unavailable - please fix your python install'
-    except Exception as e:
-        return str(e)
+    except Exception as err:
+        return str(err)
 
 
 def find(path, **kwargs):
@@ -360,20 +361,20 @@ def find(path, **kwargs):
         salt '*' file.find /var/log name=\*.[0-9] mtime=+30d size=+10m delete
     '''
     try:
-        f = salt.utils.find.Finder(kwargs)
+        finder = salt.utils.find.Finder(kwargs)
     except ValueError as ex:
         return 'error: {0}'.format(ex)
 
-    ret = [p for p in f.find(path)]
+    ret = [p for p in finder.find(path)]
     ret.sort()
     return ret
 
 
-def _sed_esc(s):
+def _sed_esc(string):
     '''
     Escape single quotes and forward slashes
     '''
-    return '{0}'.format(s).replace("'", "'\"'\"'").replace("/", "\/")
+    return '{0}'.format(string).replace("'", "'\"'\"'").replace("/", "\/")
 
 
 def sed(path, before, after, limit='', backup='.bak', options='-r -e',
@@ -541,9 +542,9 @@ def append(path, *args):
     '''
     # Largely inspired by Fabric's contrib.files.append()
 
-    with salt.utils.fopen(path, "a") as f:
+    with salt.utils.fopen(path, "a") as ofile:
         for line in args:
-            f.write('{0}\n'.format(line))
+            ofile.write('{0}\n'.format(line))
 
     return "Wrote {0} lines to '{1}'".format(len(args), path)
 

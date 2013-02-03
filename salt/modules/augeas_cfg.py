@@ -3,27 +3,23 @@ Manages configuration files via augeas
 
 :depends:   - Augeas Python adapter
 '''
-# Load Augeas libs
+
+# Load third party libs
+HAS_AUGEAS = False
 try:
     from augeas import Augeas
+    HAS_AUGEAS = True
 except ImportError:
-    Augeas = False
-
-__outputter__ = {
-    'ls': 'yaml',
-    'get': 'yaml',
-    'match': 'yaml',
-}
+    pass
 
 
 def __virtual__():
     '''
     Only run this module if the augeas python module is installed
     '''
-    if Augeas:
+    if HAS_AUGEAS:
         return 'augeas'
-    else:
-        return False
+    return False
 
 
 def _recurmatch(path, aug):
@@ -115,7 +111,6 @@ def setvalue(*args):
 
         %wheel ALL = PASSWD : ALL , NOPASSWD : /usr/bin/apt-get , /usr/bin/aptitude
     '''
-    prefix = None
     aug = Augeas()
     ret = {'retval': False}
 
@@ -196,7 +191,7 @@ def remove(path):
     return ret
 
 
-def ls(path):
+def ls(path):  # pylint: disable-msg=C0103
     '''
     List the direct children of a node
 

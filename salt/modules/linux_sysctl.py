@@ -12,11 +12,6 @@ from salt._compat import string_types
 from salt.exceptions import CommandExecutionError
 
 
-__outputter__ = {
-    'assign': 'txt',
-    'get': 'txt',
-}
-
 # TODO: Add unpersist() to remove either a sysctl or sysctl/value combo from
 # the config
 
@@ -107,7 +102,7 @@ def persist(name, value, config='/etc/sysctl.conf'):
         try:
             with salt.utils.fopen(config, 'w+') as _fh:
                 _fh.write('#\n# Kernel sysctl configuration\n#\n')
-        except (IOError, OSError) as exc:
+        except (IOError, OSError):
             msg = 'Could not write to file: {0}'
             raise CommandExecutionError(msg.format(config))
 

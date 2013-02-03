@@ -15,6 +15,7 @@ Mount any type of mountable filesystem with the mounted function:
           - defaults
 '''
 
+# Import salt libs
 from salt._compat import string_types
 
 
@@ -23,7 +24,7 @@ def mounted(
         device,
         fstype,
         mkmnt=False,
-        opts=['defaults'],
+        opts=None,
         dump=0,
         pass_num=0,
         config='/etc/fstab',
@@ -74,6 +75,8 @@ def mounted(
     # string
     if isinstance(opts, string_types):
         opts = opts.split(',')
+    elif opts is None:
+        opts = ['defaults']
 
     # Get the active data
     active = __salt__['mount.active']()

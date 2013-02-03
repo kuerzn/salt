@@ -29,7 +29,7 @@ class UserTest(integration.ModuleCase,
         self.assertSaltTrueReturn(ret)
 
     @destructiveTest
-    @skipIf(os.geteuid() is not 0, 'you must be this root to run this test')
+    @skipIf(os.geteuid() is not 0, 'you must be root to run this test')
     def test_user_not_present(self):
         """
         This is a DESTRUCTIVE TEST it creates a new user on the minion.
@@ -42,7 +42,7 @@ class UserTest(integration.ModuleCase,
         self.assertSaltTrueReturn(ret)
 
     @destructiveTest
-    @skipIf(os.geteuid() is not 0, 'you must be this root to run this test')
+    @skipIf(os.geteuid() is not 0, 'you must be root to run this test')
     def test_user_present_nondefault(self):
         """
         This is a DESTRUCTIVE TEST it creates a new user on the on the minion.
@@ -55,7 +55,7 @@ class UserTest(integration.ModuleCase,
         self.assertSaltTrueReturn(ret)
 
     @destructiveTest
-    @skipIf(os.geteuid() is not 0, 'you must be this root to run this test')
+    @skipIf(os.geteuid() is not 0, 'you must be root to run this test')
     def test_user_present_gid_from_name_default(self):
         """
         This is a DESTRUCTIVE TEST. It creates a new user on the on the minion.
@@ -79,7 +79,7 @@ class UserTest(integration.ModuleCase,
         self.assertSaltTrueReturn(ret)
 
     @destructiveTest
-    @skipIf(os.geteuid() is not 0, 'you must be this root to run this test')
+    @skipIf(os.geteuid() is not 0, 'you must be root to run this test')
     def test_user_present_gid_from_name(self):
         """
         This is a DESTRUCTIVE TEST it creates a new user on the on the minion.
@@ -101,6 +101,78 @@ class UserTest(integration.ModuleCase,
         ret = self.run_state('user.absent', name='salt_test')
         self.assertSaltTrueReturn(ret)
         ret = self.run_state('group.absent', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+
+    @destructiveTest
+    @skipIf(os.geteuid() is not 0, 'you must be root to run this test')
+    def test_user_present_groups_is_none(self):
+        """
+        This is a DESTRUCTIVE TEST, it creates a new user and two groups on the
+        minion.
+        """
+        ret = self.run_state('group.present', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('group.present', name='salt_test_2')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('user.present', name='salt_test',
+                             gid_from_name=True, home='/var/lib/salt_test',
+                             groups=['salt_test_2'])
+        self.assertSaltTrueReturn(ret)
+
+        ret = self.run_function('user.info', ['salt_test'])
+        self.assertReturnNonEmptySaltType(ret)
+        in_groups = set(ret['groups'])
+        self.assertEqual(in_groups, set(['salt_test', 'salt_test_2']))
+
+        ret = self.run_state('user.present', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+
+        ret = self.run_function('user.info', ['salt_test'])
+        self.assertReturnNonEmptySaltType(ret)
+        in_groups = set(ret['groups'])
+        self.assertEqual(in_groups, set(['salt_test', 'salt_test_2']))
+
+        ret = self.run_state('user.absent', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('group.absent', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('group.absent', name='salt_test_2')
+        self.assertSaltTrueReturn(ret)
+
+    @destructiveTest
+    @skipIf(os.geteuid() is not 0, 'you must be root to run this test')
+    def test_user_present_groups_is_empty_list(self):
+        """
+        This is a DESTRUCTIVE TEST, it creates a new user and two groups on the
+        minion.
+        """
+        ret = self.run_state('group.present', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('group.present', name='salt_test_2')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('user.present', name='salt_test',
+                             gid_from_name=True, home='/var/lib/salt_test',
+                             groups=['salt_test_2'])
+        self.assertSaltTrueReturn(ret)
+
+        ret = self.run_function('user.info', ['salt_test'])
+        self.assertReturnNonEmptySaltType(ret)
+        in_groups = set(ret['groups'])
+        self.assertEqual(in_groups, set(['salt_test', 'salt_test_2']))
+
+        ret = self.run_state('user.present', name='salt_test', groups=[])
+        self.assertSaltTrueReturn(ret)
+
+        ret = self.run_function('user.info', ['salt_test'])
+        self.assertReturnNonEmptySaltType(ret)
+        in_groups = set(ret['groups'])
+        self.assertEqual(in_groups, set(['salt_test']))
+
+        ret = self.run_state('user.absent', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('group.absent', name='salt_test')
+        self.assertSaltTrueReturn(ret)
+        ret = self.run_state('group.absent', name='salt_test_2')
         self.assertSaltTrueReturn(ret)
 
 

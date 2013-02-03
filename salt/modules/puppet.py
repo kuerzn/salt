@@ -2,14 +2,18 @@
 Execute puppet routines
 '''
 
-from salt import utils
+# Import salt libs
+import salt.utils
 
-__outputter__ = {
-    'run':  'txt',
-    'noop': 'txt',
-    'fact': 'txt',
-    'facts': None,
-}
+
+def __virtual__():
+    '''
+    Only load if puppet is installed
+    '''
+    if salt.utils.which('facter'):
+        return 'puppet'
+    return False
+
 
 def _check_puppet():
     '''
@@ -18,13 +22,15 @@ def _check_puppet():
     # I thought about making this a virtual module, but then I realized that I
     # would require the minion to restart if puppet was installed after the
     # minion was started, and that would be rubbish
-    utils.check_or_die('puppet')
+    salt.utils.check_or_die('puppet')
+
 
 def _check_facter():
     '''
     Checks if facter is installed
     '''
-    utils.check_or_die('facter')
+    salt.utils.check_or_die('facter')
+
 
 def _format_fact(output):
     try:
@@ -34,6 +40,7 @@ def _format_fact(output):
         fact = None
         value = None
     return (fact, value)
+
 
 class _Puppet(object):
     '''
@@ -48,7 +55,7 @@ class _Puppet(object):
         self.subcmd = 'agent'
         self.subcmd_args = []  # eg. /a/b/manifest.pp
 
-        self.kwargs = {}       # eg. --tags=apache::server
+        self.kwargs = {'color': 'false'}       # eg. --tags=apache::server
         self.args = []         # eg. --noop
 
         self.vardir = '/var/lib/puppet'
@@ -59,32 +66,45 @@ class _Puppet(object):
         Format the command string to executed using cmd.run_all.
         '''
 
-        cmd = 'puppet {subcmd} --vardir {vardir} --confdir {confdir}'.format(**self.__dict__)
+        cmd = 'puppet {subcmd} --vardir {vardir} --confdir {confdir}'.format(
+            **self.__dict__
+        )
 
         args = ' '.join(self.subcmd_args)
-        args += ''.join([' --{0}'.format(k) for k in self.args])  # single spaces
-        args += ''.join([' --{0} {1}'.format(k, v) for k, v in self.kwargs.items()])
+        args += ''.join(
+            [' --{0}'.format(k) for k in self.args]  # single spaces
+        )
+        args += ''.join([
+            ' --{0} {1}'.format(k, v) for k, v in self.kwargs.items()]
+        )
 
         return '{0} {1}'.format(cmd, args)
 
-    def arguments(self, args=[]):
+    def arguments(self, args=None):
         '''
-        Read in arguments for the current subcommand. These are added to the cmd
-        line without '--' appended. Any others are redirected as standard options
-        with the double hyphen prefixed.
+        Read in arguments for the current subcommand. These are added to the
+        cmd line without '--' appended. Any others are redirected as standard
+        options with the double hyphen prefixed.
         '''
         # permits deleting elements rather than using slices
-        args = list(args)
+        args = args and list(args) or []
 
         # match against all known/supported subcmds
         if self.subcmd == 'apply':
+            # apply subcommand requires a manifest file to execute
             self.subcmd_args = [args[0]]
             del args[0]
+
         if self.subcmd == 'agent':
-            args.append('test')
+            # no arguments are required
+            args.extend([
+                'onetime', 'verbose', 'ignorecache', 'no-daemonize',
+                'no-usecacheonfailure', 'no-splay', 'show_diff'
+            ])
 
         # finally do this after subcmd has been matched for all remaining args
         self.args = args
+
 
 def run(*args, **kwargs):
     '''
@@ -111,17 +131,19 @@ def run(*args, **kwargs):
 
     if args:
         # based on puppet documentation action must come first. making the same
-        # assertion. need to ensure the list of supported cmds here matches those
-        # defined in _Puppet.arguments()
+        # assertion. need to ensure the list of supported cmds here matches
+        # those defined in _Puppet.arguments()
         if args[0] in ['agent', 'apply']:
             puppet.subcmd = args[0]
             puppet.arguments(args[1:])
-        else:
-            puppet.arguments(args)
+    else:
+        # args will exist as an empty list even if none have been provided
+        puppet.arguments(args)
 
-    puppet.kwargs = kwargs
+    puppet.kwargs.update(salt.utils.clean_kwargs(**kwargs))
 
     return __salt__['cmd.run_all'](repr(puppet))
+
 
 def noop(*args, **kwargs):
     '''
@@ -141,6 +163,7 @@ def noop(*args, **kwargs):
     args += ('noop',)
     return run(*args, **kwargs)
 
+
 def facts():
     '''
     Run facter and return the results
@@ -158,12 +181,14 @@ def facts():
     # parse it into a nice dictionary for using
     # elsewhere
     for line in output.splitlines():
-        if not line: continue
+        if not line:
+            continue
         fact, value = _format_fact(line)
         if not fact:
             continue
         ret[fact] = value
     return ret
+
 
 def fact(name):
     '''

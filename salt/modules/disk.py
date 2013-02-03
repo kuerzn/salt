@@ -2,6 +2,7 @@
 Module for gathering disk information
 '''
 
+# Import python libs
 import logging
 
 log = logging.getLogger(__name__)
@@ -18,6 +19,7 @@ def __virtual__():
     if __grains__['os'] in disable:
         return False
     return 'disk'
+
 
 def usage(args=None):
     '''
@@ -55,6 +57,7 @@ def usage(args=None):
             log.warn("Problem parsing disk usage information")
             ret = {}
     return ret
+
 
 def inodeusage(args=None):
     '''

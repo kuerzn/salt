@@ -1,248 +1,16 @@
 '''
-This module provides a custom renderer that process a salt file with a
-specified templating engine(eg, jinja) and a chosen data renderer(eg, yaml),
-extract arguments for any ``stateconf.set`` state and provide the extracted
-arguments (including salt specific args, such as 'require', etc) as template
-context. The goal is to make writing reusable/configurable/ parameterized
-salt files easier and cleaner.
-
-To use this renderer, either set it as the default renderer via the
-``renderer`` option in master/minion's config, or use the shebang line in each
-individual sls file, like so: ``#!stateconf``. Note, due to the way this
-renderer works, it must be specified as the first renderer in a render
-pipeline. That is, you cannot specify ``#!mako|yaml|stateconf``, for example.
-Instead, you specify them as renderer arguments: ``#!stateconf mako . yaml``.
-
-Here's a list of features enabled by this renderer:
-
-  - Recognizes the special state function, ``stateconf.set``, that configures a
-    default list of named arguments useable within the template context of
-    the salt file. Example::
-
-        sls_params:
-          stateconf.set:
-            - name1: value1
-            - name2: value2
-            - name3:
-              - value1
-              - value2
-              - value3
-            - require_in:
-              - cmd: output
-
-        # --- end of state config ---
-
-        output:
-          cmd.run:
-            - name: |
-                echo 'name1={{sls_params.name1}}
-                      name2={{sls_params.name2}}
-                      name3[1]={{sls_params.name3[1]}}
-                '
-
-    This even works with ``include`` + ``extend`` so that you can override
-    the default configured arguments by including the salt file and then
-    ``extend`` the ``stateconf.set`` states that come from the included salt
-    file.
-
-    Notice that the end of configuration marker(``# --- end of state config --``)
-    is needed to separate the use of 'stateconf.set' form the rest of your salt
-    file. The regex that matches such marker can be configured via the
-    ``stateconf_end_marker`` option in your master or minion config file.
-
-    Sometimes, you'd like to set a default argument value that's based on
-    earlier arguments in the same ``stateconf.set``. For example, you may be
-    tempted to do something like this::
-
-        apache:
-          stateconf.set:
-            - host: localhost
-            - port: 1234
-            - url: 'http://{{host}}:{{port}}/'
-
-        # --- end of state config ---
-
-        test:
-          cmd.run:
-            - name: echo '{{apache.url}}'
-            - cwd: /
-
-    However, this won't work, but can be worked around like so::
-
-        apache:
-          stateconf.set:
-            - host: localhost
-            - port: 1234
-        {#  - url: 'http://{{host}}:{{port}}/' #}
-
-        # --- end of state config ---
-        # {{ apache.setdefault('url', "http://%(host)s:%(port)s/" % apache) }}
-
-        test:
-          cmd.run:
-            - name: echo '{{apache.url}}'
-            - cwd: /
-
-  - Adds support for relative include and exclude of .sls files. Example::
-
-        include:
-          - .apache
-          - .db.mysql
-
-        exclude:
-          - sls: .users
-
-    If the above is written in a salt file at `salt://some/where.sls` then
-    it will include `salt://some/apache.sls` and `salt://some/db/mysql.sls`,
-    and exclude `salt://some/users.ssl`. Actually, it does that by rewriting
-    the above ``include`` and ``exclude`` into::
-
-        include:
-          - some.apache
-          - some.db.mysql
-
-        exclude:
-          - sls: some.users
-
-
-  - Adds a ``sls_dir`` context variable that expands to the directory containing
-    the rendering salt file. So, you can write ``salt://${sls_dir}/...`` to
-    reference templates files used by your salt file.
-
-  - Prefixes any state id(declaration or reference) that starts with a dot(``.``)
-    to avoid duplicated state ids when the salt file is included by other salt
-    files.
-
-    For example, in the `salt://some/file.sls`, a state id such as ``.sls_params``
-    will be turned into ``some.file::sls_params``. Example::
-
-        .vim:
-          package.installed
-
-    Above will be translated into::
-
-        some.file::vim:
-          package.installed:
-            - name: vim
-    
-    Notice how that if a state under a dot-prefixed state id has no ``name``
-    argument then one will be added automatically by using the state id with
-    the leading dot stripped off.
-
-    The leading dot trick can be used with extending state ids as well,
-    so you can include relatively and extend relatively. For example, when
-    extending a state in `salt://some/other_file.sls`, eg,::
-
-        include:
-          - .file
-
-        extend:
-          .file::sls_params:
-            stateconf.set:
-              - name1: something
-
-    Above will be pre-processed into::
-
-        include:
-          - some.file
-
-        extend:
-          some.file::sls_params:
-            stateconf.set:
-              - name1: something
-
-  - Optionally(enabled by default, *disable* via the `-G` renderer option,
-    eg, in the shebang line: ``#!stateconf -G``), generates a
-    ``stateconf.set`` goal state(state id named as ``.goal`` by default,
-    configurable via the master/minion config option, ``stateconf_goal_state``)
-    that requires all other states in the salt file. Note, the ``.goal``
-    state id is subject to dot-prefix rename rule mentioned earlier.
-
-    Such goal state is intended to be required by some state in an including
-    salt file. For example, in your webapp salt file, if you include a
-    sls file that is supposed to setup Tomcat, you might want to make sure that
-    all states in the Tomcat sls file will be executed before some state in
-    the webapp sls file.
-
-  - Optionally(enable via the `-o` renderer option, eg, in the shebang line:
-    ``#!stateconf -o``), orders the states in a sls file by adding a
-    ``require`` requisite to each state such that every state requires the
-    state defined just before it. The order of the states here is the order
-    they are defined in the sls file.(Note: this feature is only available
-    if your minions are using Python >= 2.7. For Python2.6, it should also
-    work if you install the `ordereddict` module from PyPI)
-
-    By enabling this feature, you are basically agreeing to author your sls
-    files in a way that gives up the explicit(or implicit?) ordering imposed
-    by the use of ``require``, ``watch``, ``require_in`` or ``watch_in``
-    requisites, and instead, you rely on the order of states you define in
-    the sls files. This may or may not be a better way for you. However, if
-    there are many states defined in a sls file, then it tends to be easier
-    to see the order they will be executed with this feature.
-
-    You are still allowed to use all the requisites, with a few restricitons.
-    You cannot ``require`` or ``watch`` a state defined *after* the current
-    state. Similarly, in a state, you cannot ``require_in`` or ``watch_in``
-    a state defined *before* it. Breaking any of the two restrictions above
-    will result in a state loop. The renderer will check for such incorrect
-    uses if this feature is enabled.
-
-    Additionally, ``names`` declarations cannot be used with this feature
-    because the way they are compiled into low states make it impossible to
-    guarantee the order in which they will be executed. This is also checked
-    by the renderer. As a workaround for not being able to use ``names``,
-    you can achieve the same effect, by generate your states with the
-    template engine available within your sls file.
-
-    Finally, with the use of this feature, it becomes possible to easily make
-    an included sls file execute all its states *after* some state(say, with
-    id ``X``) in the including sls file.  All you have to do is to make state,
-    ``X``, ``require_in`` the first state defined in the included sls file.
-
-
-When writing sls files with this renderer, you should avoid using what can be
-defined in a ``name`` argument of a state as the state's id. That is, avoid
-writing your states like this::
-
-    /path/to/some/file:
-      file.managed:
-        - source: salt://some/file
-
-    cp /path/to/some/file file2:
-      cmd.run:
-        - cwd: /
-        - require:
-          - file: /path/to/some/file
-
-Instead, you should define the state id and the ``name`` argument separately
-for each state, and the id should be something meaningful and easy to reference
-within a requisite(which I think is a good habit anyway, and such extra
-indirection would also makes your sls file easier to modify later). Thus, the
-above states should be written like this::
-
-    add-some-file:
-      file.managed:
-        - name: /path/to/some/file
-        - source: salt://some/file
-
-    copy-files:
-      cmd.run:
-        - name: cp /path/to/some/file file2
-        - cwd: /
-        - require:
-          - file: add-some-file
-
-Moreover, when referencing a state from a requisite, you should reference the
-state's id plus the state name rather than the state name plus its ``name``
-argument. (Yes, in the above example, you can actually ``require`` the
-``file: /path/to/some/file``, instead of the ``file: add-some-file``). The
-reason is that this renderer will re-write or rename state id's and their
-references for state id's prefixed with ``.``. So, if you reference ``name``
-then there's no way to reliably rewrite such reference.
-
+:maintainer: Jack Kuan <kjkuan@gmail.com>
+:maturity: new
+:platform: all
 '''
-
+# See http://docs.saltstack.org/en/latest/ref/renderers/all/salt.renderers.stateconf.html
+# for a guide to using this module.
+#
 # TODO:
+#
+#   - support exclude declarations
+#   - support include declarations with env
+#
 #   - sls meta/info state: Eg,
 #
 #       sls_info:
@@ -258,7 +26,6 @@ then there's no way to reliably rewrite such reference.
 #
 
 # Import python libs
-import sys
 import logging
 import re
 import getopt
@@ -268,10 +35,9 @@ from cStringIO import StringIO
 
 # Import salt libs
 import salt.utils
-from salt.renderers.yaml import HAS_ORDERED_DICT
 from salt.exceptions import SaltRenderError
 
-__all__ = [ 'render' ]
+__all__ = ['render']
 
 log = logging.getLogger(__name__)
 
@@ -279,6 +45,9 @@ log = logging.getLogger(__name__)
 __opts__ = {
     'stateconf_end_marker': r'#\s*-+\s*end of state config\s*-+',
     # eg, something like "# --- end of state config --" works by default.
+
+    'stateconf_start_state': '.start',
+    # name of the state id for the generated start state.
 
     'stateconf_goal_state': '.goal',
     # name of the state id for the generated goal state.
@@ -304,7 +73,7 @@ def __init__(opts):
 MOD_BASENAME = ospath.basename(__file__)
 INVALID_USAGE_ERROR = SaltRenderError(
     'Invalid use of {0} renderer!\n'
-    '''Usage: #!{1} [-Go] <data_renderer> [options] . <template_renderer> [options]
+    '''Usage: #!{1} [-GoSp] [<data_renderer> [options] . <template_renderer> [options]]
 
 where an example <data_renderer> would be yaml and a <template_renderer> might
 be jinja. Each renderer can be passed its renderer specific options.
@@ -315,45 +84,23 @@ Options(for this renderer):
 
   -o   Indirectly order the states by adding requires such that they will be
        executed in the order they are defined in the sls. Implies using yaml -o.
+
+  -s   Generate the start state that gets inserted as the first state in
+       the sls. This only makes sense if your high state data dict is ordered.
+
+  -p   Assume high state input. This option allows you to pipe high state data
+       through this renderer. With this option, the use of stateconf.set state
+       in the sls will have no effect, but other features of the renderer still
+       apply.
+
   '''.format(MOD_BASENAME, MOD_BASENAME)
 )
 
 
-def render(template_file, env='', sls='', argline='', **kws):
-    NO_GOAL_STATE = False
-    IMPLICIT_REQUIRE = False
-
-    renderers = kws['renderers']
-    opts, args = getopt.getopt(argline.split(), 'Go')
-    argline = ' '.join(args) if args else 'yaml . jinja'
-
-    if ('-G', '') in opts:
-        NO_GOAL_STATE = True
-
-    # Split on the first dot surrounded by spaces but not preceded by a
-    # backslash. A backslash preceded dot will be replaced with just dot.
-    args = [
-        arg.strip().replace('\\.', '.')
-        for arg in re.split(r'\s+(?<!\\)\.\s+', argline, 1)
-    ]
-    try:
-        name, rd_argline = (args[0] + ' ').split(' ', 1)
-        render_data = renderers[name]  # eg, the yaml renderer
-        if ('-o', '') in opts:
-            if name == 'yaml':
-                IMPLICIT_REQUIRE = True
-                rd_argline = '-o ' + rd_argline
-            else:
-                raise SaltRenderError(
-                    'Implicit ordering is only supported if the yaml renderer '
-                    'is used!'
-                )
-        name, rt_argline = (args[1] + ' ').split(' ', 1)
-        render_template = renderers[name]  # eg, the mako renderer
-    except KeyError, e:
-        raise SaltRenderError('Renderer: {0} is not available!'.format(e))
-    except IndexError, e:
-        raise INVALID_USAGE_ERROR
+def render(input, env='', sls='', argline='', **kws):
+    gen_start_state = False
+    no_goal_state = False
+    implicit_require = False
 
     def process_sls_data(data, context=None, extract=False):
         sls_dir = ospath.dirname(sls.replace('.', ospath.sep))
@@ -367,7 +114,9 @@ def render(template_file, env='', sls='', argline='', **kws):
                 argline=rt_argline.strip(), **kws
         )
         high = render_data(tmplout, env, sls, argline=rd_argline.strip())
+        return process_high_data(high, extract)
 
+    def process_high_data(high, extract):
         # make a copy so that the original, un-preprocessed highstate data
         # structure can be used later for error checking if anything goes
         # wrong during the preprocessing.
@@ -376,7 +125,7 @@ def render(template_file, env='', sls='', argline='', **kws):
             rewrite_single_shorthand_state_decl(data)
             rewrite_sls_includes_excludes(data, sls)
 
-            if not extract and IMPLICIT_REQUIRE:
+            if not extract and implicit_require:
                 sid = has_names_decls(data)
                 if sid:
                     raise SaltRenderError(
@@ -387,7 +136,10 @@ def render(template_file, env='', sls='', argline='', **kws):
                     )
                 add_implicit_requires(data)
 
-            if not extract and not NO_GOAL_STATE:
+            if gen_start_state:
+                add_start_state(data)
+
+            if not extract and not no_goal_state:
                 add_goal_state(data)
 
             rename_state_ids(data, sls)
@@ -395,8 +147,9 @@ def render(template_file, env='', sls='', argline='', **kws):
             if extract:
                 extract_state_confs(data)
 
-        except Exception, e:
-            if isinstance(e, SaltRenderError):
+        except Exception, err:
+            raise
+            if isinstance(err, SaltRenderError):
                 raise
             log.exception(
                 'Error found while pre-processing the salt file, '
@@ -409,34 +162,72 @@ def render(template_file, env='', sls='', argline='', **kws):
                 raise SaltRenderError('\n'.join(errors))
             raise SaltRenderError('sls preprocessing/rendering failed!')
         return data
+    #----------------------
+    renderers = kws['renderers']
+    opts, args = getopt.getopt(argline.split(), 'Gosp')
+    argline = ' '.join(args) if args else 'yaml . jinja'
 
-    if isinstance(template_file, basestring):
-        with salt.utils.fopen(template_file, 'r') as f:
-            sls_templ = f.read()
-    else:  # assume file-like
-        sls_templ = template_file.read()
+    if ('-G', '') in opts:
+        no_goal_state = True
+    if ('-o', '') in opts:
+        implicit_require = True
+    if ('-s', '') in opts:
+        gen_start_state = True
 
-    # first pass to extract the state configuration
-    match = re.search(__opts__['stateconf_end_marker'], sls_templ)
-    if match:
-        process_sls_data(sls_templ[:match.start()], extract=True)
-
-    # if some config has been extracted then remove the sls-name prefix
-    # of the keys in the extracted stateconf.set context to make them easier
-    # to use in the salt file.
-    if STATE_CONF:
-        tmplctx = STATE_CONF.copy()
-        if tmplctx:
-            prefix = sls + '::'
-            for k in tmplctx.keys():
-                if k.startswith(prefix):
-                    tmplctx[k[len(prefix):]] = tmplctx[k]
-                    del tmplctx[k]
+    if ('-p', '') in opts:
+        data = process_high_data(input, extract=False)
     else:
-        tmplctx = {}
+        # Split on the first dot surrounded by spaces but not preceded by a
+        # backslash. A backslash preceded dot will be replaced with just dot.
+        args = [
+            arg.strip().replace('\\.', '.')
+            for arg in re.split(r'\s+(?<!\\)\.\s+', argline, 1)
+        ]
+        try:
+            name, rd_argline = (args[0] + ' ').split(' ', 1)
+            render_data = renderers[name]  # eg, the yaml renderer
+            if implicit_require:
+                if name == 'yaml':
+                    rd_argline = '-o ' + rd_argline
+                else:
+                    raise SaltRenderError(
+                        'Implicit ordering is only supported if the yaml renderer '
+                        'is used!'
+                    )
+            name, rt_argline = (args[1] + ' ').split(' ', 1)
+            render_template = renderers[name]  # eg, the mako renderer
+        except KeyError, err:
+            raise SaltRenderError('Renderer: {0} is not available!'.format(err))
+        except IndexError:
+            raise INVALID_USAGE_ERROR
 
-    # do a second pass that provides the extracted conf as template context
-    data = process_sls_data(sls_templ, tmplctx)
+        if isinstance(input, basestring):
+            with salt.utils.fopen(input, 'r') as ifile:
+                sls_templ = ifile.read()
+        else:  # assume file-like
+            sls_templ = input.read()
+
+        # first pass to extract the state configuration
+        match = re.search(__opts__['stateconf_end_marker'], sls_templ)
+        if match:
+            process_sls_data(sls_templ[:match.start()], extract=True)
+
+        # if some config has been extracted then remove the sls-name prefix
+        # of the keys in the extracted stateconf.set context to make them easier
+        # to use in the salt file.
+        if STATE_CONF:
+            tmplctx = STATE_CONF.copy()
+            if tmplctx:
+                prefix = sls + '::'
+                for k in tmplctx.keys():
+                    if k.startswith(prefix):
+                        tmplctx[k[len(prefix):]] = tmplctx[k]
+                        del tmplctx[k]
+        else:
+            tmplctx = {}
+
+        # do a second pass that provides the extracted conf as template context
+        data = process_sls_data(sls_templ, tmplctx)
 
     if log.isEnabledFor(logging.DEBUG):
         import pprint  # FIXME: pprint OrderedDict
@@ -451,7 +242,8 @@ def has_names_decls(data):
         for _ in nvlist(args, ['names']):
             return sid
 
-def rewrite_single_shorthand_state_decl(data):
+
+def rewrite_single_shorthand_state_decl(data):  # pylint: disable-msg=C0103
     '''
     Rewrite all state declarations that look like this::
 
@@ -484,9 +276,9 @@ def rewrite_sls_includes_excludes(data, sls):
                 if each.startswith('.'):
                     includes[i] = sls + each[1:]
         elif sid == 'exclude':
-            for d in data[sid]:
-                if 'sls' in d and d['sls'].startswith('.'):
-                    d['sls'] = sls + d['sls'][1:]
+            for sdata in data[sid]:
+                if 'sls' in sdata and sdata['sls'].startswith('.'):
+                    sdata['sls'] = sls + sdata['sls'][1:]
 
 
 def _local_to_abs_sid(sid, sls):  # id must starts with '.'
@@ -557,10 +349,10 @@ def rename_state_ids(data, sls, is_extend=False):
 
     # update "local" references to the renamed states.
 
-    for sid, states, _, args in statelist(data):
-        if sid == 'extend' and not is_extend:
-            rename_state_ids(states, sls, True)
-            continue
+    if 'extend' in data and not is_extend:
+        rename_state_ids(data['extend'], sls, True)
+
+    for sid, _, _, args in statelist(data):
         for req, sname, sid in nvlist2(args, REQUISITES):
             if sid.startswith('.'):
                 req[sname] = _local_to_abs_sid(sid, sls)
@@ -578,11 +370,12 @@ def rename_state_ids(data, sls, is_extend=False):
                 for arg in args:
                     if isinstance(arg, dict) and iter(arg).next() == 'name':
                         break
-                else: # then no '- name: ...' is defined in the state args
-                    # add the sid without the leading dot as the name.
+                else:  # then no '- name: ...' is defined in the state args
+                       # add the sid without the leading dot as the name.
                     args.insert(0, dict(name=sid[1:]))
             data[newsid] = data[sid]
             del data[sid]
+
 
 
 REQUIRE = set(['require', 'watch'])
@@ -598,7 +391,7 @@ from itertools import chain
 #   explicit require_in/watch_in can only contain states after it
 def add_implicit_requires(data):
 
-    def T(sid, state):
+    def T(sid, state):  # pylint: disable-msg=C0103
         return '{0}:{1}'.format(sid, state_name(state))
 
     states_before = set()
@@ -653,6 +446,20 @@ def add_implicit_requires(data):
 
         states_before.add(tag)
         prev_state = (state_name(sname), sid)
+
+
+def add_start_state(data):
+    start_sid = __opts__['stateconf_start_state']
+    if start_sid in data:
+        raise SaltRenderError(
+            'Can\'t generate start state({0})! The same state id already '
+            'exists!'.format(start_sid)
+        )
+    if not data:
+        return
+    first = statelist(data, set(['include', 'exclude', 'extend'])).next()[0]
+    reqin = {state_name(data[first].iterkeys().next()): first}
+    data[start_sid] = { STATE_FUNC: [ {'require_in': [reqin]} ] }
 
 
 def add_goal_state(data):
@@ -713,11 +520,11 @@ def extract_state_confs(data, is_extend=False):
 
         to_dict = STATE_CONF_EXT if is_extend else STATE_CONF
         conf = to_dict.setdefault(state_id, Bunch())
-        for d in state_dict[key]:
-            if not isinstance(d, dict):
+        for sdk in state_dict[key]:
+            if not isinstance(sdk, dict):
                 continue
-            k, v = d.iteritems().next()
-            conf[k] = v
+            key, val = sdk.iteritems().next()
+            conf[key] = val
 
         if not is_extend and state_id in STATE_CONF_EXT:
             extend = STATE_CONF_EXT[state_id]

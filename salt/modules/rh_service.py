@@ -3,7 +3,8 @@ Service support for classic Red Hat type systems. This interface uses the
 service command (so it is compatible with upstart systems) and the chkconfig
 command.
 '''
-# Import Salt libs
+
+# Import salt libs
 import salt.utils
 
 
@@ -19,6 +20,7 @@ def __virtual__():
                'CloudLinux',
                'Amazon',
                'Fedora',
+               'ALT',
               ]
     if __grains__['os'] in enable:
         if __grains__['os'] == 'Fedora':
@@ -31,7 +33,7 @@ def _runlevel():
     '''
     Return the current runlevel
     '''
-    out = __salt__['cmd.run']('runlevel')
+    out = __salt__['cmd.run']('/sbin/runlevel')
     # unknown will be returned while inside a kickstart environment, since
     # this is usually a server deployment it should be safe to assume runlevel
     # 3.  If not all service related states will throw an out of range
@@ -52,7 +54,7 @@ def get_enabled():
     '''
     rlevel = _runlevel()
     ret = set()
-    cmd = '/sbin/chkconfig --list'
+    cmd = '/sbin/chkconfig --list --type sysv'
     lines = __salt__['cmd.run'](cmd).splitlines()
     for line in lines:
         comps = line.split()
@@ -60,6 +62,17 @@ def get_enabled():
             continue
         if '{0}:on'.format(rlevel) in line:
             ret.add(comps[0])
+    
+    cmd = '/sbin/chkconfig --list --type xinetd'
+    lines = __salt__['cmd.run'](cmd).splitlines()
+    for line in lines:
+        comps = line.split()
+        if not comps:
+            continue
+        if not comps[1]:
+            continue
+        if comps[1] == 'on':
+            ret.add(comps[0].strip(':'))
     return sorted(ret)
 
 def get_disabled():

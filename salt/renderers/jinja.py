@@ -1,10 +1,11 @@
 from __future__ import absolute_import
+
+# Import python libs
 from StringIO import StringIO
 
-# Import Salt libs
+# Import salt libs
 from salt.exceptions import SaltRenderError
 import salt.utils.templates
-
 
 
 def render(template_file, env='', sls='', argline='',
@@ -20,7 +21,7 @@ def render(template_file, env='', sls='', argline='',
         raise SaltRenderError(
                   'Unknown renderer option: {opt}'.format(opt=argline)
               )
-    tmp_data = salt.utils.templates.jinja(template_file, to_str=True,
+    tmp_data = salt.utils.templates.JINJA(template_file, to_str=True,
                     salt=__salt__,
                     grains=__grains__,
                     opts=__opts__,

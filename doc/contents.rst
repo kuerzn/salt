@@ -11,18 +11,11 @@ Full Table of Contents
     topics/configuration
     topics/hacking
     topics/targeting/index
-    topics/tutorials/modules
-    topics/tutorials/starting_states
-    topics/tutorials/states*
+    topics/tutorials/index
     topics/eauth/*
-    topics/tutorials/firewall
-    topics/tutorials/bootstrap_ec2
-    topics/tutorials/esky
-    topics/tutorials/preseed_key
-    topics/tutorials/standalone_minion
     topics/pillar/index
     topics/master_tops/index
-    topics/jobs/index
+    topics/jobs/*
     topics/nonroot
     topics/troubleshooting/index
     topics/troubleshooting/yaml_idiosyncrasies
@@ -30,6 +23,10 @@ Full Table of Contents
     topics/projects/index
     topics/event/index
     topics/tests/*
+    topics/reactor/*
+    topics/style
+    topics/git/*
+    topics/development/index
 
     ref/index
     ref/modules/*
@@ -48,15 +45,16 @@ Full Table of Contents
     ref/runners/all/index
     ref/wheel/all/index
     ref/output/all/index
+    ref/clients/index
     ref/peer
     ref/clientacl
     ref/syndic
     ref/python-api
-    ref/file_server/index
-    ref/file_server/file_roots
-    ref/file_server/dynamic-modules
+    ref/file_server/*
     ref/configuration/*
     ref/internals/index
+    ref/topology
+    ref/windows-package-manager
 
     ref/cli/index
     ref/cli/salt
@@ -68,5 +66,4 @@ Full Table of Contents
     ref/cli/salt-run
     ref/cli/salt-syndic
 
-    topics/specs/salt_auth_proto_abs
     topics/releases/index

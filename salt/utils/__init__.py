@@ -3,37 +3,40 @@ Some of the utils used by salt
 '''
 from __future__ import absolute_import
 
-# Import Python libs
+# Import python libs
 import io
 import os
 import re
 import imp
-import random
 import sys
-import fcntl
+import time
+import shlex
+import shutil
+import random
 import socket
 import logging
 import inspect
 import hashlib
 import datetime
-import tempfile
-import shlex
-import shutil
-import subprocess
-import time
 import platform
+import tempfile
+import subprocess
+import zmq
 from calendar import month_abbr as months
 
 try:
     import fcntl
+    HAS_FNCTL = True
 except ImportError:
     # fcntl is not available on windows
-    fcntl = None
+    HAS_FNCTL = False
 
-# Import Salt libs
+# Import salt libs
 import salt.minion
 import salt.payload
-from salt.exceptions import SaltClientError, CommandNotFoundError
+from salt.exceptions import (
+        SaltClientError, CommandNotFoundError, SaltSystemExit
+)
 
 
 # Do not use these color declarations, use get_colors()
@@ -197,14 +200,15 @@ def daemonize_if(opts, **kwargs):
             data[key[6:]] = val
     if not 'jid' in data:
         return
+
     serial = salt.payload.Serial(opts)
     proc_dir = salt.minion.get_proc_dir(opts['cachedir'])
     fn_ = os.path.join(proc_dir, data['jid'])
     daemonize()
     sdata = {'pid': os.getpid()}
     sdata.update(data)
-    with salt.utils.fopen(fn_, 'w+') as f:
-        f.write(serial.dumps(sdata))
+    with fopen(fn_, 'w+') as ofile:
+        ofile.write(serial.dumps(sdata))
 
 
 def profile_func(filename=None):
@@ -231,10 +235,9 @@ def profile_func(filename=None):
 
 def which(exe=None):
     '''
-    Python clone of POSIX's /usr/bin/which
+    Python clone of /usr/bin/which
     '''
     if exe:
-        (path, name) = os.path.split(exe)
         if os.access(exe, os.X_OK):
             return exe
 
@@ -259,6 +262,7 @@ def which_bin(exes):
         if not path:
             continue
         return path
+    return None
 
 
 def list_files(directory):
@@ -384,7 +388,7 @@ def required_modules_error(name, docstring):
     return msg.format(filename, ', '.join(modules))
 
 
-def prep_jid(cachedir, sum_type, user='root'):
+def prep_jid(cachedir, sum_type, user='root', nocache=False):
     '''
     Return a job id and prepare the job id directory
     '''
@@ -393,10 +397,13 @@ def prep_jid(cachedir, sum_type, user='root'):
     jid_dir_ = jid_dir(jid, cachedir, sum_type)
     if not os.path.isdir(jid_dir_):
         os.makedirs(jid_dir_)
-        with salt.utils.fopen(os.path.join(jid_dir_, 'jid'), 'w+') as fn_:
+        with fopen(os.path.join(jid_dir_, 'jid'), 'w+') as fn_:
             fn_.write(jid)
+        if nocache:
+            with fopen(os.path.join(jid_dir_, 'nocache'), 'w+') as fn_:
+                fn_.write('')
     else:
-        return prep_jid(cachedir, sum_type)
+        return prep_jid(cachedir, sum_type, user=user, nocache=nocache)
     return jid
 
 
@@ -419,10 +426,7 @@ def check_or_die(command):
     if command is None:
         raise CommandNotFoundError("'None' is not a valid command.")
 
-    import salt.modules.cmdmod
-    __salt__ = {'cmd.has_exec': salt.modules.cmdmod.has_exec}
-
-    if not __salt__['cmd.has_exec'](command):
+    if not which(command):
         raise CommandNotFoundError(command)
 
 
@@ -482,8 +486,9 @@ def copyfile(source, dest, backup_mode='', cachedir=''):
     # If SELINUX is available run a restorecon on the file
     rcon = which('restorecon')
     if rcon:
-        cmd = [rcon, dest]
-        subprocess.call(cmd)
+        with open(os.devnull, 'w') as dev_null:
+            cmd = [rcon, dest]
+            subprocess.call(cmd, stdout=dev_null, stderr=dev_null)
     if os.path.isfile(tgt):
         # The temp file failed to move
         try:
@@ -524,7 +529,7 @@ def pem_finger(path, sum_type='md5'):
     '''
     if not os.path.isfile(path):
         return ''
-    with salt.utils.fopen(path, 'rb') as fp_:
+    with fopen(path, 'rb') as fp_:
         key = ''.join(fp_.readlines()[1:-1])
     pre = getattr(hashlib, sum_type)(key).hexdigest()
     finger = ''
@@ -653,7 +658,7 @@ def istextfile(fp_, blocksize=512):
     If more than 30% of the chars in the block are non-text, or there
     are NUL ('\x00') bytes in the block, assume this is a binary file.
     '''
-    PY3 = sys.version_info[0] == 3
+    PY3 = sys.version_info[0] == 3  # pylint: disable-msg=C0103
     int2byte = (lambda x: bytes((x,))) if PY3 else chr
     text_characters = (
         b''.join(int2byte(i) for i in range(32, 127)) +
@@ -735,11 +740,11 @@ def memoize(func):
     '''
     cache = {}
 
-    def _m(*args):
+    def _memoize(*args):
         if args not in cache:
             cache[args] = func(*args)
         return cache[args]
-    return _m
+    return _memoize
 
 
 def fopen(*args, **kwargs):
@@ -766,17 +771,15 @@ def fopen(*args, **kwargs):
             log.critical(err)
             return False
         fhandle = io.BytesIO(str(res))
-    else:
-        if fcntl is None:
-            # fcntl is not available on windows
-            return fhandle
+    elif HAS_FNCTL:
+        # modify the file descriptor on systems with fcntl
+        # unix and unix-like systems only
         try:
-            FD_CLOEXEC = fcntl.FD_CLOEXEC
+            FD_CLOEXEC = fcntl.FD_CLOEXEC   # pylint: disable-msg=C0103
         except AttributeError:
-            FD_CLOEXEC = 1
+            FD_CLOEXEC = 1                  # pylint: disable-msg=C0103
         old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
         fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
-
     return fhandle
 
 
@@ -794,3 +797,49 @@ def mkstemp(*args, **kwargs):
     os.close(fd_)
     del(fd_)
     return fpath
+
+
+def clean_kwargs(**kwargs):
+    '''
+    Clean out the __pub* keys from the kwargs dict passed into the execution
+    module functions. The __pub* keys are useful for tracking what was used to
+    invoke the function call, but they may not be desierable to have if
+    passing the kwargs forward wholesale.
+    '''
+    ret = {}
+    for key, val in kwargs.items():
+        if not key.startswith('__pub'):
+            ret[key] = val
+    return ret
+
+
+@memoize
+def is_windows():
+    '''
+    Simple function to return if a host is Windows or not
+    '''
+    return sys.platform.startswith('win')
+
+
+@memoize
+def is_linux():
+    '''
+    Simple function to return if a host is Linux or not
+    '''
+    return sys.platform.startswith('linux')
+
+
+def check_ipc_path_max_len(uri):
+    # The socket path is limited to 107 characters on Solaris and
+    # Linux, and 103 characters on BSD-based systems.
+    ipc_path_max_len = getattr(zmq, 'IPC_PATH_MAX_LEN', 103)
+    if ipc_path_max_len and len(uri) > ipc_path_max_len:
+        raise SaltSystemExit(
+            'The socket path is longer than allowed by OS. '
+            '{0!r} is longer than {1} characters. '
+            'Either try to reduce the length of this setting\'s '
+            'path or switch to TCP; in the configuration file, '
+            'set "ipc_mode: tcp".'.format(
+                uri, ipc_path_max_len
+            )
+        )

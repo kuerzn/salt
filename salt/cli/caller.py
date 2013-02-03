@@ -3,7 +3,7 @@ The caller module is used as a front-end to manage direct calls to the salt
 minion modules.
 '''
 
-# Import python modules
+# Import python libs
 import os
 import sys
 import logging
@@ -58,7 +58,7 @@ class Caller(object):
             sys.stderr.write('Function {0} is not available\n'.format(fun))
             sys.exit(1)
         try:
-            args, kw = salt.minion.detect_kwargs(
+            args, kwargs = salt.minion.detect_kwargs(
                 self.minion.functions[fun], self.opts['arg'])
             sdata = {
                     'fun': fun,
@@ -67,11 +67,11 @@ class Caller(object):
                     'tgt': 'salt-call'}
             with salt.utils.fopen(proc_fn, 'w+') as fp_:
                 fp_.write(self.serial.dumps(sdata))
-            ret['return'] = self.minion.functions[fun](*args, **kw)
+            ret['return'] = self.minion.functions[fun](*args, **kwargs)
         except (TypeError, CommandExecutionError) as exc:
             msg = 'Error running \'{0}\': {1}\n'
             active_level = LOG_LEVELS.get(
-                self.opts['log_level'].lower, logging.ERROR)
+                self.opts['log_level'].lower(), logging.ERROR)
             if active_level <= logging.DEBUG:
                 sys.stderr.write(traceback.format_exc())
             sys.stderr.write(msg.format(fun, str(exc)))
@@ -88,13 +88,15 @@ class Caller(object):
             oput = self.minion.functions[fun].__outputter__
             if isinstance(oput, string_types):
                 ret['out'] = oput
+            if oput == 'highstate':
+                ret['return'] = {'local': ret['return']}
         if self.opts.get('return', ''):
             ret['id'] = self.opts['id']
             ret['fun'] = fun
             for returner in self.opts['return'].split(','):
                 try:
                     self.minion.returners['{0}.returner'.format(returner)](ret)
-                except Exception as exc:
+                except Exception:
                     pass
         return ret
 
@@ -116,14 +118,21 @@ class Caller(object):
         Print out the grains
         '''
         grains = salt.loader.grains(self.opts)
-        salt.output.display_output(grains, 'yaml', self.opts)
+        salt.output.display_output({'local': grains}, 'grains', self.opts)
 
     def run(self):
         '''
         Execute the salt call logic
         '''
+
         ret = self.call()
+        out = ret['return']
+        # If the type of return is not a dict we wrap the return data
+        # This will ensure that --local and local functions will return the
+        # same data structure as publish commands.
+        if type(ret['return']) != type({}):
+            out = {'local': ret['return']}
         salt.output.display_output(
-                {'local': ret['return']},
-                ret.get('out', 'pprint'),
+                out,
+                ret.get('out', 'nested'),
                 self.opts)

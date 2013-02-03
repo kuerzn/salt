@@ -2,17 +2,11 @@
 Support for Apache
 '''
 
+# Import python libs
 import re
-import salt.utils
 
-__outputter__ = {
-    'signal': 'txt',
-    'version': 'txt',
-    'vhosts': 'yaml',
-    'modules': 'yaml',
-    'servermods': 'yaml',
-    'fullversion': 'yaml',
-}
+# Import salt libs
+import salt.utils
 
 
 def __virtual__():
@@ -74,8 +68,8 @@ def fullversion():
                 continue
             ret[comps[0].strip().lower().replace(' ', '_')] = comps[1].strip()
         elif ' -D' in line:
-            cw = define_re.sub('', line)
-            ret['compiled_with'].append(cw)
+            cwith = define_re.sub('', line)
+            ret['compiled_with'].append(cwith)
     return ret
 
 

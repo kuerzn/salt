@@ -1,7 +1,8 @@
+# Import python libs
 from __future__ import absolute_import
 import warnings
 
-# Import third party modules
+# Import third party libs
 import yaml
 from yaml.nodes import MappingNode
 from yaml.constructor import ConstructorError
@@ -11,7 +12,7 @@ try:
 except Exception:
     pass
 
-load = yaml.load
+load = yaml.load  # pylint: disable-msg=C0103
 
 
 class DuplicateKeyWarning(RuntimeWarning):
@@ -20,6 +21,7 @@ class DuplicateKeyWarning(RuntimeWarning):
     '''
 
 warnings.simplefilter('always', category=DuplicateKeyWarning)
+
 
 # with code integrated form https://gist.github.com/844388
 class CustomLoader(yaml.SafeLoader):
@@ -81,4 +83,3 @@ class CustomLoader(yaml.SafeLoader):
                     and not node.value.startswith(('0b', '0x')):
                 node.value = node.value.lstrip('0')
         return yaml.constructor.SafeConstructor.construct_scalar(self, node)
-

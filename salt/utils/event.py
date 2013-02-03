@@ -1,6 +1,7 @@
 '''
 Manage events
 '''
+
 # Events are all fired off via a zeromq pub socket, and listened to with
 # local subscribers. The event messages are comprised of two parts delimited
 # at the 20 char point. The first 20 characters are used for the zeromq
@@ -10,9 +11,8 @@ Manage events
 # extracted. All of the formatting is self contained in the event module, so
 # we should be able to modify the structure in the future since the same module
 # to read is the same module to fire off events.
-#
-#
-# Import Python libs
+
+# Import python libs
 import os
 import fnmatch
 import glob
@@ -20,16 +20,19 @@ import hashlib
 import errno
 import logging
 import multiprocessing
+from multiprocessing import Process
 
-# Import Third Party libs
+# Import third party libs
 import zmq
 
-# Import Salt libs
+# Import salt libs
 import salt.payload
 import salt.loader
-from salt.template import compile_template
-
+import salt.state
+import salt.utils
+from salt._compat import string_types
 log = logging.getLogger(__name__)
+
 
 class SaltEvent(object):
     '''
@@ -54,10 +57,12 @@ class SaltEvent(object):
                     sock_dir,
                     'master_event_pub.ipc'
                     ))
+            salt.utils.check_ipc_path_max_len(puburi)
             pulluri = 'ipc://{0}'.format(os.path.join(
                     sock_dir,
                     'master_event_pull.ipc'
                     ))
+            salt.utils.check_ipc_path_max_len(pulluri)
         else:
             if kwargs.get('ipc_mode', '') == 'tcp':
                 puburi = 'tcp://127.0.0.1:{0}'.format(
@@ -71,10 +76,12 @@ class SaltEvent(object):
                         sock_dir,
                         'minion_event_{0}_pub.ipc'.format(id_hash)
                         ))
+                salt.utils.check_ipc_path_max_len(puburi)
                 pulluri = 'ipc://{0}'.format(os.path.join(
                         sock_dir,
                         'minion_event_{0}_pull.ipc'.format(id_hash)
                         ))
+                salt.utils.check_ipc_path_max_len(pulluri)
         log.debug(
             '{0} PUB socket URI: {1}'.format(self.__class__.__name__, puburi)
         )
@@ -82,6 +89,23 @@ class SaltEvent(object):
             '{0} PULL socket URI: {1}'.format(self.__class__.__name__, pulluri)
         )
         return puburi, pulluri
+
+    def subscribe(self, tag):
+        '''
+        Subscribe to events matching the passed tag.
+        '''
+        if not self.cpub:
+            self.connect_pub()
+        self.sub.setsockopt(zmq.SUBSCRIBE, tag)
+
+    def unsubscribe(self, tag):
+        '''
+        Un-subscribe to events matching the passed tag.
+        '''
+        if not self.cpub:
+            # There's no way we've even subscribed to this tag
+            return
+        self.sub.setsockopt(zmq.UNSUBSCRIBE, tag)
 
     def connect_pub(self):
         '''
@@ -105,21 +129,22 @@ class SaltEvent(object):
         Get a single publication
         '''
         wait = wait * 1000
-        if not self.cpub:
-            self.connect_pub()
-        self.sub.setsockopt(zmq.SUBSCRIBE, tag)
+
+        self.subscribe(tag)
         while True:
             socks = dict(self.poller.poll(wait))
             if self.sub in socks and socks[self.sub] == zmq.POLLIN:
                 raw = self.sub.recv()
+                # Double check the tag
+                if tag != raw[:20].rstrip('|'):
+                    continue
                 data = self.serial.loads(raw[20:])
                 if full:
                     ret = {'data': data,
                            'tag': raw[:20].rstrip('|')}
                     return ret
                 return data
-            else:
-                return None
+            return None
 
     def iter_events(self, tag='', full=False):
         '''
@@ -142,6 +167,31 @@ class SaltEvent(object):
         self.push.send(event)
         return True
 
+    def destroy(self):
+        if self.cpub is True and self.sub.closed is False:
+            # Wait at most 2.5 secs to send any remaining messages in the
+            # socket or the context.term() bellow will hang indefinitely.
+            # See https://github.com/zeromq/pyzmq/issues/102
+            self.sub.setsockopt(zmq.LINGER, 1)
+            self.sub.close()
+        if self.cpush is True and self.push.closed is False:
+            self.push.setsockopt(zmq.LINGER, 1)
+            self.push.close()
+        # If socket's are not unregistered from a poller, nothing which touches
+        # that poller get's garbage collected. The Poller itself, it's
+        # registered sockets and the Context
+        for socket in self.poller.sockets.keys():
+            if socket.closed is False:
+                # Should already be closed from above, but....
+                socket.setsockopt(zmq.LINGER, 1)
+                socket.close()
+            self.poller.unregister(socket)
+        if self.context.closed is False:
+            self.context.term()
+
+    def __del__(self):
+        self.destroy()
+
 
 class MasterEvent(SaltEvent):
     '''
@@ -152,6 +202,13 @@ class MasterEvent(SaltEvent):
         self.connect_pub()
 
 
+class LocalClientEvent(MasterEvent):
+    '''
+    This class is just used to differentiate who is handling the events,
+    specially on logs, but it's the same as MasterEvent.
+    '''
+
+
 class MinionEvent(SaltEvent):
     '''
     Create a master event management object
@@ -160,7 +217,7 @@ class MinionEvent(SaltEvent):
         super(MinionEvent, self).__init__('minion', **kwargs)
 
 
-class EventPublisher(multiprocessing.Process):
+class EventPublisher(Process):
     '''
     The interface that takes master events and republishes them out to anyone
     who wants to listen
@@ -174,20 +231,20 @@ class EventPublisher(multiprocessing.Process):
         Bind the pub and pull sockets for events
         '''
         # Set up the context
-        context = zmq.Context(1)
+        self.context = zmq.Context(1)
         # Prepare the master event publisher
-        epub_sock = context.socket(zmq.PUB)
+        self.epub_sock = self.context.socket(zmq.PUB)
         epub_uri = 'ipc://{0}'.format(
                 os.path.join(self.opts['sock_dir'], 'master_event_pub.ipc')
                 )
         # Prepare master event pull socket
-        epull_sock = context.socket(zmq.PULL)
+        self.epull_sock = self.context.socket(zmq.PULL)
         epull_uri = 'ipc://{0}'.format(
                 os.path.join(self.opts['sock_dir'], 'master_event_pull.ipc')
                 )
         # Start the master event publisher
-        epub_sock.bind(epub_uri)
-        epull_sock.bind(epull_uri)
+        self.epub_sock.bind(epub_uri)
+        self.epull_sock.bind(epull_uri)
         # Restrict access to the sockets
         pub_mode = 448
         if self.opts.get('client_acl') or self.opts.get('external_auth'):
@@ -208,18 +265,24 @@ class EventPublisher(multiprocessing.Process):
                 # Catch and handle EINTR from when this process is sent
                 # SIGUSR1 gracefully so we don't choke and die horribly
                 try:
-                    package = epull_sock.recv()
-                    epub_sock.send(package)
+                    package = self.epull_sock.recv()
+                    self.epub_sock.send(package)
                 except zmq.ZMQError as exc:
                     if exc.errno == errno.EINTR:
                         continue
                     raise exc
         except KeyboardInterrupt:
-            epub_sock.close()
-            epull_sock.close()
+            if self.epub_sock.closed is False:
+                self.epub_sock.setsockopt(zmq.LINGER, 1)
+                self.epub_sock.close()
+            if self.epull_sock.closed is False:
+                self.epull_sock.setsockopt(zmq.LINGER, 1)
+                self.epull_sock.close()
+            if self.context.closed is False:
+                self.context.term()
 
 
-class Reactor(object):
+class Reactor(multiprocessing.Process, salt.state.Compiler):
     '''
     Read in the reactor configuration variable and compare it to events
     processed on the master.
@@ -227,8 +290,10 @@ class Reactor(object):
     as reactions to events
     '''
     def __init__(self, opts):
-        self.opts = opts
-        self.rend = salt.loader.render(self.opts, {})
+        multiprocessing.Process.__init__(self)
+        salt.state.Compiler.__init__(self, opts)
+        self.event = SaltEvent('master', self.opts['sock_dir'])
+        self.wrap = ReactWrap(self.opts)
 
     def render_reaction(self, glob_ref, tag, data):
         '''
@@ -237,21 +302,20 @@ class Reactor(object):
         '''
         react = {}
         for fn_ in glob.glob(glob_ref):
-            react.update(compile_template(
+            react.update(self.render_template(
                     fn_,
-                    self.rend,
-                    self.opts['renderer'],
                     tag=tag,
                     data=data))
         return react
 
     def list_reactors(self, tag):
         '''
-        Take in the tag and the data from an event and return a list of the
-        reactors to process
+        Take in the tag from an event and return a list of the reactors to
+        process
         '''
+        log.debug('Gathering rections for tag {0}'.format(tag))
         reactors = []
-        for ropt in opts['reactors']:
+        for ropt in self.opts['reactor']:
             if not isinstance(ropt, dict):
                 continue
             if not len(ropt) == 1:
@@ -259,7 +323,7 @@ class Reactor(object):
             key = ropt.keys()[0]
             val = ropt[key]
             if fnmatch.fnmatch(tag, key):
-                if isinstance(val, str):
+                if isinstance(val, string_types):
                     reactors.append(val)
                 elif isinstance(val, list):
                     reactors.extend(val)
@@ -269,7 +333,138 @@ class Reactor(object):
         '''
         Render a list of reactor files and returns a reaction struct
         '''
-        react = {}
+        log.debug('Compiling reactions for tag {0}'.format(tag))
+        high = {}
+        chunks = []
         for fn_ in reactors:
-            react.update(self.render_reaction(fn_, tag, data))
-        return react
+            high.update(self.render_reaction(fn_, tag, data))
+        if high:
+            errors = self.verify_high(high)
+            if errors:
+                return errors
+            chunks = self.order_chunks(self.compile_high_data(high))
+        return chunks
+
+    def call_reactions(self, chunks):
+        '''
+        Execute the reaction state
+        '''
+        for chunk in chunks:
+            self.wrap.run(chunk)
+
+    def run(self):
+        '''
+        Enter into the server loop
+        '''
+        for data in self.event.iter_events(full=True):
+            reactors = self.list_reactors(data['tag'])
+            if not reactors:
+                continue
+            chunks = self.reactions(data['tag'], data['data'], reactors)
+            if chunks:
+                self.call_reactions(chunks)
+
+
+class ReactWrap(object):
+    '''
+    Create a wrapper that executes low data for the reaction system
+    '''
+    def __init__(self, opts):
+        self.opts = opts
+
+    def run(self, low):
+        '''
+        Execute the specified function in the specified state by passing the
+        LowData
+        '''
+        l_fun = getattr(self, low['state'])
+        f_call = salt.utils.format_call(l_fun, low)
+
+        ret = l_fun(*f_call.get('args', ()), **f_call.get('kwargs', {}))
+        return ret
+
+    def cmd(self, *args, **kwargs):
+        '''
+        Wrap LocalClient for running :ref:`execution modules <all-salt.modules>`
+        '''
+        local = salt.client.LocalClient(self.opts['conf_file'])
+        return local.cmd_async(*args, **kwargs)
+
+    def runner(self, fun, **kwargs):
+        '''
+        Wrap RunnerClient for executing :ref:`runner modules <all-salt.runners>`
+        '''
+        runner = salt.runner.RunnerClient(self.opts)
+        return runner.low(fun, kwargs)
+
+    def wheel(self, fun, **kwargs):
+        '''
+        Wrap Wheel to enable executing :ref:`wheel modules <all-salt.wheel>`
+        '''
+        kwargs['fun'] = fun
+        wheel = salt.wheel.Wheel(self.opts)
+        return wheel.master_call(**kwargs)
+
+
+class StateFire(object):
+    '''
+    Evaluate the data from a state run and fire events on the master and minion
+    for each returned chunk that is not "green"
+    This object is made to only run on a minion
+    '''
+    def __init__(self, opts, auth=None):
+        self.opts = opts
+        self.event = SaltEvent(opts, 'minion')
+        if not auth:
+            self.auth = salt.crypt.SAuth(self.opts)
+        else:
+            self.auth = auth
+
+    def fire_master(self, data, tag):
+        '''
+        Fire an event off on the master server
+
+        CLI Example::
+
+            salt '*' event.fire_master 'stuff to be in the event' 'tag'
+        '''
+        load = {'id': self.opts['id'],
+                'tag': tag,
+                'data': data,
+                'cmd': '_minion_event'}
+        sreq = salt.payload.SREQ(self.opts['master_uri'])
+        try:
+            sreq.send('aes', self.auth.crypticle.dumps(load))
+        except:
+            pass
+        return True
+
+    def fire_running(self, running):
+        '''
+        Pass in a state "running" dict, this is the return dict from a state
+        call. The dict will be processesd and fire events.
+
+        By default yellows and reds fire events on the master and minion, but
+        this can be configured.
+        '''
+        load = {'id': self.opts['id'],
+                'events': [],
+                'cmd': '_minion_event'}
+        for stag in sorted(
+                running,
+                key=lambda k: running[k].get('__run_num__', 0)):
+            if running[stag]['result'] and not running[stag]['changes']:
+                continue
+            tag = 'state_{0}_{1}'.format(
+                    str(running[stag]['result']),
+                    'True' if running[stag]['changes'] else 'False')
+            load['events'].append(
+                    {'tag': tag,
+                     'data': running[stag]}
+                    )
+        sreq = salt.payload.SREQ(self.opts['master_uri'])
+        try:
+            sreq.send('aes', self.auth.crypticle.dumps(load))
+        except:
+            pass
+        return True

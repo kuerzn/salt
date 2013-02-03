@@ -52,7 +52,7 @@ def _changes(
     change = {}
     found = False
 
-    if __grains__['os'] != 'FreeBSD':
+    if not __grains__['os'] in ('FreeBSD', 'OpenBSD'):
         lshad = __salt__['shadow.info'](name)
 
     for lusr in __salt__['user.getent']():
@@ -71,7 +71,7 @@ def _changes(
             # comparison purposes
             if __salt__['file.gid_to_group'](gid or lusr['gid']) in lusr['groups']:
                 lusr['groups'].remove(__salt__['file.gid_to_group'](gid or lusr['gid']))
-            if wanted_groups:
+            if groups is not None or wanted_groups:
                 if lusr['groups'] != wanted_groups:
                     change['groups'] = wanted_groups
             if home:
@@ -82,7 +82,7 @@ def _changes(
                 if lusr['shell'] != shell:
                     change['shell'] = shell
             if password:
-                if __grains__['os'] != 'FreeBSD':
+                if not __grains__['os'] in ('FreeBSD', 'OpenBSD'):
                     if lshad['pwd'] == '!' or \
                             lshad['pwd'] != '!' and enforce_password:
                         if lshad['pwd'] != password:
@@ -139,6 +139,8 @@ def present(
     groups
         A list of groups to assign the user to, pass a list object. If a group
         specified here does not exist on the minion, the state will fail.
+        If set to the empty list, the user will be removed from all groups
+        except the default group.
 
     optional_groups
         A list of groups to assign the user to, pass a list object. If a group
@@ -214,9 +216,9 @@ def present(
     # Log a warning for all groups specified in both "groups" and
     # "optional_groups" lists.
     if groups and optional_groups:
-        for x in set(groups).intersection(optional_groups):
+        for isected in set(groups).intersection(optional_groups):
             log.warning('Group "{0}" specified in both groups and '
-                        'optional_groups for user {1}'.format(x, name))
+                        'optional_groups for user {1}'.format(isected, name))
 
     if fullname is None:
         fullname = ''
@@ -255,7 +257,7 @@ def present(
                 ret['comment'] += '{0}: {1}\n'.format(key, val)
             return ret
         # The user is present
-        if __grains__['os'] != 'FreeBSD':
+        if not __grains__['os'] in ('FreeBSD', 'OpenBSD'):
             lshad = __salt__['shadow.info'](name)
         pre = __salt__['user.info'](name)
         for key, val in changes.items():
@@ -266,14 +268,14 @@ def present(
 
         post = __salt__['user.info'](name)
         spost = {}
-        if __grains__['os'] != 'FreeBSD':
+        if not __grains__['os'] in ('FreeBSD', 'OpenBSD'):
             if lshad['pwd'] != password:
                 spost = __salt__['shadow.info'](name)
         # See if anything changed
         for key in post:
             if post[key] != pre[key]:
                 ret['changes'][key] = post[key]
-        if __grains__['os'] != 'FreeBSD':
+        if not __grains__['os'] in ('FreeBSD', 'OpenBSD'):
             for key in spost:
                 if lshad[key] != spost[key]:
                     ret['changes'][key] = spost[key]

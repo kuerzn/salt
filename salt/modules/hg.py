@@ -2,15 +2,17 @@
 Support for the Mercurial SCM
 '''
 
+# Import salt libs
 from salt import utils
 
-__outputter__ = {
-  'clone': 'txt',
-  'revision': 'txt',
-}
+if utils.is_windows():
+    hg_binary = "hg.exe"
+else:
+    hg_binary = "hg"
+
 
 def _check_hg():
-    utils.check_or_die('hg')
+    utils.check_or_die(hg_binary)
 
 def revision(cwd, rev='tip', short=False, user=None):
     '''

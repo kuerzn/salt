@@ -3,21 +3,27 @@ Module for gathering disk information on Windows
 
 :depends:   - win32api Python module
 '''
+
+# Import python libs
+import ctypes
+import string
+
+# Import salt libs
 try:
-    import ctypes
-    import string
     import win32api
-    is_windows = True
+    IS_WINDOWS = True
 except ImportError:
-    is_windows = False
+    IS_WINDOWS = False
+
 
 def __virtual__():
     '''
     Only works on Windows systems
     '''
-    if not is_windows:
+    if not IS_WINDOWS:
         return False
     return 'disk'
+
 
 def usage():
     '''
@@ -37,10 +43,16 @@ def usage():
             drive_bitmask >>= 1
         for drive in drives:
             try:
-                sectorspercluster, bytespersector, freeclusters, totalclusters =\
-                        win32api.GetDiskFreeSpace('{0}:\\'.format(drive))
+                (sectorspercluster,
+                 bytespersector,
+                 freeclusters,
+                 totalclusters) = win32api.GetDiskFreeSpace(
+                     '{0}:\\'.format(drive)
+                 )
                 totalsize = sectorspercluster * bytespersector * totalclusters
-                available_space = sectorspercluster * bytespersector * freeclusters
+                available_space = (
+                    sectorspercluster * bytespersector * freeclusters
+                )
                 used = totalsize - available_space
                 capacity = int(used / float(totalsize) * 100)
                 ret['{0}:\\'.format(drive)] = {
@@ -59,4 +71,3 @@ def usage():
                     'capacity': None,
                 }
         return ret
-
