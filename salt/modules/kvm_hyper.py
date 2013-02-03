@@ -9,24 +9,22 @@ interact with kvm on behalf of the salt-virt interface
 # VERY likely to change.
 
 
-# Import Python Libs
+# Import python libs
 import os
 import shutil
 import string
 import subprocess
 from xml.dom import minidom
 
-# Import libvirt
+# Import third party libs
+import yaml
 try:
     import libvirt
-    has_libvirt = True
+    HAS_LIBVIRT = True
 except ImportError:
-    has_libvirt = False
+    HAS_LIBVIRT = False
 
-# Import Third party modules
-import yaml
-
-# Import Salt Modules
+# Import salt libs
 import salt.utils
 from salt._compat import StringIO
 
@@ -51,9 +49,12 @@ def __virtual__():
         return False
     if not os.path.exists('/proc/modules'):
         return False
-    if 'kvm_' not in salt.utils.fopen('/proc/modules').read():
+    try:
+        if 'kvm_' not in salt.utils.fopen('/proc/modules').read():
+            return False
+    except IOError:
         return False
-    if not has_libvirt:
+    if not HAS_LIBVIRT:
         return False
     try:
         libvirt_conn = libvirt.open('qemu:///system')
@@ -239,13 +240,13 @@ def _get_image(image, vda):
 
 
 def _gen_xml(name,
-        cpus,
-        mem,
-        vmdir,
-        disks,
-        network,
-        desc,
-        opts):
+             cpus,
+             mem,
+             vmdir,
+             disks,
+             network,
+             desc,
+             opts):
     '''
     Generate the xml used for the libvirt configuration
     '''
@@ -328,9 +329,9 @@ def init(
         mem,
         image,
         storage_dir,
-        network={'eth0': {'bridge': 'br0', 'mac': ''}},
+        network=None,
         desc='',
-        opts={}):
+        opts=None):
     '''
     Create a KVM virtual machine based on these passed options, the virtual
     machine will be started upon creation
@@ -339,13 +340,15 @@ def init(
 
         salt '*' hyper.init webserver 2 2048 salt://fedora/f16.img:virt /srv/vm/images
     '''
+    if network is None:
+        network = {'eth0': {'bridge': 'br0', 'mac': ''}}
     vmdir = os.path.join(storage_dir, name)
     if not os.path.exists(vmdir):
         os.makedirs(vmdir)
     vda = os.path.join(vmdir, 'vda')
     _get_image(image, vda)
     # The image is in place
-    xml = _gen_xml(name, cpus, mem, vmdir, network, desc, opts)
+    xml = _gen_xml(name, cpus, mem, vmdir, network, desc, opts or {})
     config = os.path.join(vmdir, 'config.xml')
     salt.utils.fopen(config, 'w+').write(xml)
     return start(config)

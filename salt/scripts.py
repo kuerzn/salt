@@ -1,11 +1,12 @@
 '''
 This module contains the function calls to execute command line scipts
 '''
-# Import Python libs
+
+# Import python libs
 import os
 import sys
 
-# Import Salt libs
+# Import salt libs
 import salt
 import salt.cli
 
@@ -97,8 +98,5 @@ def salt_main():
     '''
     if '' in sys.path:
         sys.path.remove('')
-    try:
-        client = salt.cli.SaltCMD()
-        client.run()
-    except KeyboardInterrupt:
-        raise SystemExit('\nExiting gracefully on Ctrl-c')
+    client = salt.cli.SaltCMD()
+    client.run()

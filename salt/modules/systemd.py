@@ -1,28 +1,46 @@
 '''
 Provide the service module for systemd
 '''
-# Import Python libs
+# Import python libs
+import os
 import re
-# Import Salt libs
+
+# Import salt libs
 import salt.utils
 
 LOCAL_CONFIG_PATH = '/etc/systemd/system'
-VALID_UNIT_TYPES = ['service','socket', 'device', 'mount', 'automount',
+VALID_UNIT_TYPES = ['service', 'socket', 'device', 'mount', 'automount',
                     'swap', 'target', 'path', 'timer']
 
 def __virtual__():
     '''
-    Only work on systems which default to systemd
+    Only work on systems that have been booted with systemd
     '''
-    enable = (
-            'Arch',
-            'openSUSE',
-            )
-    if __grains__['os'] == 'Fedora' and __grains__['osrelease'] > 15:
-        return 'service'
-    elif __grains__['os'] in enable:
+    if __grains__['kernel'] == 'Linux' and _sd_booted():
         return 'service'
     return False
+
+
+def _sd_booted():
+    '''
+    Return True if the system was booted with systemd, False otherwise.
+    '''
+    # We can cache this for as long as the minion runs.
+    if not "systemd.sd_booted" in __context__:
+        try:
+            # This check does the same as sd_booted() from libsystemd-daemon:
+            # http://www.freedesktop.org/software/systemd/man/sd_booted.html
+            cgroup_fs = os.stat('/sys/fs/cgroup')
+            cgroup_systemd = os.stat('/sys/fs/cgroup/systemd')
+        except OSError:
+            __context__['systemd.sd_booted'] = False
+        else:
+            if cgroup_fs.st_dev != cgroup_systemd.st_dev:
+                __context__['systemd.sd_booted'] = True
+            else:
+                __context__['systemd.sd_booted'] = False
+
+    return __context__['systemd.sd_booted']
 
 
 def _canonical_unit_name(name):
@@ -164,6 +182,17 @@ def reload(name):
         salt '*' service.reload <service name>
     '''
     return not __salt__['cmd.retcode'](_systemctl_cmd('reload', name))
+
+
+def force_reload(name):
+    '''
+    Force-reload the specified service with systemd
+
+    CLI Example::
+
+        salt '*' service.force_reload <service name>
+    '''
+    return not __salt__['cmd.retcode'](_systemctl_cmd('force-reload', name))
 
 
 # The unused sig argument is required to maintain consistency in the state

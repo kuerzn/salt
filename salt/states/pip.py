@@ -11,7 +11,7 @@ A state module to manage system installed python packages
         - version: 3.0.1
 '''
 
-# Import Salt libs
+# Import salt libs
 from salt.exceptions import CommandExecutionError, CommandNotFoundError
 
 
@@ -43,7 +43,8 @@ def installed(name,
               no_download=False,
               install_options=None,
               user=None,
-              cwd=None):
+              cwd=None,
+              __env__='base'):
     '''
     Make sure the package is installed
 
@@ -111,10 +112,11 @@ def installed(name,
         no_download=no_download,
         install_options=install_options,
         runas=user,
-        cwd=cwd
+        cwd=cwd,
+        __env__=__env__
     )
 
-    if pip_install_call and pip_install_call['retcode']==0:
+    if pip_install_call and (pip_install_call['retcode'] == 0):
         ret['result'] = True
 
         pkg_list = __salt__['pip.list'](name, bin_env, runas=user, cwd=cwd)
@@ -132,9 +134,10 @@ def installed(name,
         ret['comment'] = 'Package was successfully installed'
     elif pip_install_call:
         ret['result'] = False
-        ret['comment'] = 'Failed to install package {0}. Error: {1}'.format(
-            name, pip_install_call['stderr']
-        )
+        ret['comment'] = ('Failed to install package {0}. '
+                          'Error: {1} {2}').format(name,
+                                                   pip_install_call['stdout'],
+                                                   pip_install_call['stderr'])
     else:
         ret['result'] = False
         ret['comment'] = 'Could not install package'
@@ -150,7 +153,8 @@ def removed(name,
             proxy=None,
             timeout=None,
             user=None,
-            cwd=None):
+            cwd=None,
+            __env__='base'):
     """
     Make sure that a package is not installed.
 
@@ -186,7 +190,8 @@ def removed(name,
                                  proxy=proxy,
                                  timeout=timeout,
                                  runas=user,
-                                 cwd=cwd):
+                                 cwd=cwd,
+                                 __env__='base'):
         ret["result"] = True
         ret["changes"][name] = "Removed"
         ret["comment"] = "Package was successfully removed."

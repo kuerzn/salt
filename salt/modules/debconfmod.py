@@ -1,12 +1,30 @@
 '''
 Support for Debconf
 '''
-# Import Python libs
+
+# Import python libs
+import logging
 import os
 import re
 
-# Import Salt libs
+# Import salt libs
 import salt.utils
+
+log = logging.getLogger(__name__)
+
+
+def __virtual__():
+    '''
+    Confirm this module is on a Debian based system and that debconf-utils
+    is installed.
+    '''
+    if __grains__['os_family'] != 'Debian':
+        return False
+
+    if salt.utils.which('debconf-get-selections') is None:
+        return False
+
+    return 'debconf'
 
 
 def _unpack_lines(out):
@@ -20,13 +38,6 @@ def _unpack_lines(out):
             '(?P<value>[^\n]*)$')
     lines = re.findall(rexp, out)
     return lines
-
-
-def __virtual__():
-    '''
-    Confirm this module is on a Debian based system
-    '''
-    return 'debconf' if __grains__['os'] in ['Debian', 'Ubuntu'] else False
 
 
 def get_selections(fetchempty=True):
@@ -68,13 +79,11 @@ def show(name):
 
         salt '*' debconf.show <package name>
     '''
-
-    result = None
-
     selections = get_selections()
 
     result = selections.get(name)
     return result
+
 
 def _set_file(path):
     '''
@@ -83,6 +92,7 @@ def _set_file(path):
     cmd = 'debconf-set-selections {0}'.format(path)
 
     __salt__['cmd.run_stdout'](cmd)
+
 
 def set(package, question, type, value, *extra):
     '''
@@ -108,6 +118,7 @@ def set(package, question, type, value, *extra):
 
     return True
 
+
 def set_file(path):
     '''
     Set answers to debconf questions from a file.
@@ -116,12 +127,9 @@ def set_file(path):
 
         salt '*' debconf.set_file salt://pathto/pkg.selections
     '''
-
-    r = False
-
     path = __salt__['cp.cache_file'](path)
     if path:
         _set_file(path)
-        r = True
+        return True
 
-    return r
+    return False

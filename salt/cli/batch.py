@@ -1,12 +1,13 @@
 '''
 Execute batch runs
 '''
-# Import Python libs
+
+# Import python libs
 import math
 import time
 import copy
 
-# Import Salt libs
+# Import salt libs
 import salt.client
 import salt.output
 
@@ -35,7 +36,7 @@ class Batch(object):
         if selected_target_option is not None:
             args.append(selected_target_option)
         else:
-            args.append('glob')
+            args.append(self.opts['expr_form'])
 
         fret = []
         for ret in self.local.cmd_iter(*args):
@@ -60,7 +61,7 @@ class Batch(object):
             else:
                 return int(self.opts['batch'])
         except ValueError:
-            if not quiet:
+            if not self.quiet:
                 print(('Invalid batch data sent: {0}\nData must be in the form'
                        'of %10, 10% or 3').format(self.opts['batch']))
 
@@ -71,7 +72,7 @@ class Batch(object):
         args = [[],
                 self.opts['fun'],
                 self.opts['arg'],
-                9999999999,
+                99999,
                 'list',
                 ]
         bnum = self.get_bnum()
@@ -93,7 +94,7 @@ class Batch(object):
             active += next_
             args[0] = next_
             if next_:
-                if not quiet:
+                if not self.quiet:
                     print('\nExecuting run on {0}\n'.format(next_))
                 iters.append(
                         self.local.cmd_iter_no_block(*args))
@@ -118,7 +119,7 @@ class Batch(object):
                     pass
             for minion, data in parts.items():
                 active.remove(minion)
-                yield data['ret']
+                yield {minion: data['ret']}
                 ret[minion] = data['ret']
                 data[minion] = data.pop('ret')
                 if 'out' in data:

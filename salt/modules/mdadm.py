@@ -6,10 +6,9 @@ Salt module to manage RAID arrays with mdadm
 import os
 import logging
 
-# Import Salt libs
+# Import salt libs
 import salt.utils
 from salt.exceptions import CommandExecutionError
-
 
 # Set up logger
 log = logging.getLogger(__name__)
@@ -19,7 +18,7 @@ def __virtual__():
     '''
     mdadm provides raid functions for Linux
     '''
-    if __grains__['kernel'] == 'Linux':
+    if not __grains__['kernel'] == 'Linux':
         return False
     if not salt.utils.which('mdadm'):
         return False

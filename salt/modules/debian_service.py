@@ -2,19 +2,20 @@
 Service support for Debian systems - uses update-rc.d and service to modify the system
 '''
 
-# Import Salt libs
+# Import python libs
 import glob
 import re
 
-# Import Python libs
+# Import salt libs
 import salt.utils
+from .systemd import _sd_booted
 
 
 def __virtual__():
     '''
-    Only work on Debian
+    Only work on Debian and when systemd isn't running
     '''
-    if __grains__['os'] == 'Debian':
+    if __grains__['os'] == 'Debian' and not _sd_booted():
         return 'service'
     return False
 
@@ -34,7 +35,7 @@ def get_enabled():
 
         salt '*' service.get_enabled
     '''
-    prefix = '/etc/rc{0}.d/S'.format(_get_runlevel())
+    prefix = '/etc/rc[S{0}].d/S'.format(_get_runlevel())
     ret = set()
     lines = glob.glob('{0}*'.format(prefix))
     for line in lines:
@@ -116,6 +117,18 @@ def reload(name):
         salt '*' service.reload <service name>
     '''
     cmd = 'service {0} reload'.format(name)
+    return not __salt__['cmd.retcode'](cmd)
+
+
+def force_reload(name):
+    '''
+    Force-reload the named service
+
+    CLI Example::
+
+        salt '*' service.force_reload <service name>
+    '''
+    cmd = 'service {0} force-reload'.format(name)
     return not __salt__['cmd.retcode'](cmd)
 
 

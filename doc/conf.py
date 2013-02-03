@@ -90,14 +90,14 @@ on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
 # -- General configuration -----------------------------------------------------
 
 project = 'Salt'
-copyright = '2012, Thomas S. Hatch'
+copyright = '2013, Thomas S. Hatch'
 
 version = __version__
 release = version
 
 master_doc = 'contents'
 templates_path = ['_templates']
-exclude_patterns = ['_build']
+exclude_patterns = ['_build', '_incl/*']
 
 extensions = [
     'saltdocs',
@@ -131,7 +131,7 @@ html_title = None
 html_short_title = 'Salt'
 
 html_static_path = ['_static']
-html_logo = 'salt-vert.png'
+html_logo = 'saltstack_logo.png'
 html_favicon = 'favicon.ico'
 html_use_smartypants = False
 
@@ -168,7 +168,7 @@ latex_documents = [
   ('contents', 'Salt.tex', 'Salt Documentation', 'Thomas Hatch', 'manual'),
 ]
 
-latex_logo = '_static/salt-vert.png'
+latex_logo = '_static/saltstack_logo.png'
 
 
 ### Manpage options
@@ -195,7 +195,7 @@ man_pages = [
 epub_title = 'Salt Documentation'
 epub_author = 'Thomas S. Hatch'
 epub_publisher = epub_author
-epub_copyright = '2012, Thomas S. Hatch'
+epub_copyright = '2013, Thomas S. Hatch'
 
 epub_scheme = 'URL'
 epub_identifier = 'http://saltstack.org/'

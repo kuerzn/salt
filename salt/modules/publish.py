@@ -10,6 +10,7 @@ import salt.crypt
 import salt.payload
 from salt._compat import string_types, integer_types
 
+
 def _publish(
         tgt,
         fun,
@@ -38,7 +39,7 @@ def _publish(
     if fun == 'publish.publish':
         # Need to log something here
         return {}
-    arg = normalize_arg(arg)
+    arg = _normalize_arg(arg)
 
     sreq = salt.payload.SREQ(__opts__['master_uri'])
     auth = salt.crypt.SAuth(__opts__)
@@ -57,7 +58,11 @@ def _publish(
     return auth.crypticle.loads(
             sreq.send('aes', auth.crypticle.dumps(load), 1))
 
-def normalize_arg(arg):
+
+def _normalize_arg(arg):
+    '''
+    Take the arguments and return them in a standard list
+    '''
     if not arg:
         arg = []
 
@@ -71,6 +76,7 @@ def normalize_arg(arg):
 
     return arg
 
+
 def publish(tgt, fun, arg=None, expr_form='glob', returner='', timeout=5):
     '''
     Publish a command from the minion out to other minions, publications need
@@ -79,11 +85,23 @@ def publish(tgt, fun, arg=None, expr_form='glob', returner='', timeout=5):
     publication loop, this means that a minion cannot command another minion
     to command another minion as that would create an infinite command loop.
 
+    The expr_form argument is used to pass a target other than a glob into
+    the execution, the available options are:
+    glob
+    pcre
+    grain
+    grain_pcre
+    pillar
+    ipcidr
+    range
+    compound
+
     The arguments sent to the minion publish function are separated with
     commas. This means that for a minion executing a command with multiple
     args it will look like this::
 
         salt system.example.com publish.publish '*' user.add 'foo,1020,1020'
+        salt system.example.com publish.publish 'os:Fedora' network.interfaces '' grain
 
     CLI Example::
 
@@ -113,7 +131,7 @@ def runner(fun, arg=None):
 
         salt publish.runner manage.down
     '''
-    arg = normalize_arg(arg)
+    arg = _normalize_arg(arg)
 
     sreq = salt.payload.SREQ(__opts__['master_uri'])
     auth = salt.crypt.SAuth(__opts__)

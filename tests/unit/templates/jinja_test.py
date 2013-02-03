@@ -39,7 +39,7 @@ class TestSaltCacheLoader(TestCase):
         '''
         tmp = tempfile.gettempdir()
         loader = SaltCacheLoader({'cachedir': tmp}, env='test')
-        assert loader.searchpath == os.path.join(tmp, 'files', 'test')
+        assert loader.searchpath == [os.path.join(tmp, 'files', 'test')]
 
     def test_mockclient(self):
         '''
@@ -106,7 +106,7 @@ class TestGetTemplate(TestCase):
             'cachedir': TEMPLATES_DIR,
             'file_client': 'local',
             'file_roots': {
-                'other': os.path.join(TEMPLATES_DIR, 'files', 'test')
+                'other': [os.path.join(TEMPLATES_DIR, 'files', 'test')]
             }
         }
 
@@ -120,7 +120,7 @@ class TestGetTemplate(TestCase):
             out = render_jinja_tmpl(
                     fp_.read(),
                     dict(opts=self.local_opts, env='other'))
-        self.assertEqual(out, 'world')
+        self.assertEqual(out, 'world\n')
 
     def test_fallback_noloader(self):
         '''
@@ -131,7 +131,7 @@ class TestGetTemplate(TestCase):
         out = render_jinja_tmpl(
                 salt.utils.fopen(filename).read(),
                 dict(opts=self.local_opts, env='other'))
-        self.assertEqual(out, 'Hey world !a b !')
+        self.assertEqual(out, 'Hey world !a b !\n')
 
     def test_env(self):
         '''
@@ -149,6 +149,6 @@ class TestGetTemplate(TestCase):
                 salt.utils.fopen(filename).read(),
                 dict(opts={'cachedir': TEMPLATES_DIR, 'file_client': 'remote'},
                      a='Hi', b='Salt', env='test'))
-        self.assertEqual(out, 'Hey world !Hi Salt !')
+        self.assertEqual(out, 'Hey world !Hi Salt !\n')
         self.assertEqual(fc.requests[0]['path'], 'salt://macro')
         SaltCacheLoader.file_client = _fc

@@ -39,15 +39,9 @@ def __virtual__():
     Only work on posix-like systems
     '''
     # win_file takes care of windows
-    if __grains__['os'] == 'Windows':
+    if salt.utils.is_windows():
         return False
     return 'file'
-
-
-__outputter__ = {
-    'touch':  'txt',
-    'append': 'txt',
-}
 
 
 def __clean_tmp(sfn):
@@ -71,8 +65,8 @@ def _is_bin(path):
     Return True if a file is a bin, just checks for NULL char, this should be
     expanded to reflect how git checks for bins
     '''
-    with salt.utils.fopen(path, 'rb') as f:
-        return '\0' in f.read(2048)
+    with salt.utils.fopen(path, 'rb') as ifile:
+        return '\0' in ifile.read(2048)
 
 
 def gid_to_group(gid):
@@ -89,7 +83,7 @@ def gid_to_group(gid):
         # This is not an integer, maybe it's already the group name?
         gid = group_to_gid(gid)
 
-    if not gid:
+    if gid == '':
         # Don't even bother to feed it to grp
         return ''
 
@@ -287,16 +281,16 @@ def get_sum(path, form='md5'):
     if not os.path.isfile(path):
         return 'File not found'
     try:
-        with salt.utils.fopen(path, 'rb') as f:
-            return getattr(hashlib, form)(f.read()).hexdigest()
-    except (IOError, OSError) as e:
-        return 'File Error: {0}'.format(e)
-    except AttributeError as e:
+        with salt.utils.fopen(path, 'rb') as ifile:
+            return getattr(hashlib, form)(ifile.read()).hexdigest()
+    except (IOError, OSError) as err:
+        return 'File Error: {0}'.format(err)
+    except AttributeError:
         return 'Hash {0} not supported'.format(form)
-    except NameError as e:
+    except NameError:
         return 'Hashlib unavailable - please fix your python install'
-    except Exception as e:
-        return str(e)
+    except Exception as err:
+        return str(err)
 
 
 def get_hash(path, form='md5', chunk_size=4096):
@@ -313,10 +307,10 @@ def get_hash(path, form='md5', chunk_size=4096):
         hash_type = getattr(hashlib, form)
     except AttributeError:
         raise ValueError('Invalid hash type: {0}'.format(form))
-    with salt.utils.fopen(path, 'rb') as f:
+    with salt.utils.fopen(path, 'rb') as ifile:
         hash_obj = hash_type()
         while True:
-            chunk = f.read(chunk_size)
+            chunk = ifile.read(chunk_size)
             if not chunk:
                 return hash_obj.hexdigest()
             hash_obj.update(chunk)
@@ -434,25 +428,25 @@ def find(path, **kwargs):
         salt '*' file.find /var/log name=\*.[0-9] mtime=+30d size=+10m delete
     '''
     try:
-        f = salt.utils.find.Finder(kwargs)
+        finder = salt.utils.find.Finder(kwargs)
     except ValueError as ex:
         return 'error: {0}'.format(ex)
 
-    ret = [p for p in f.find(path)]
+    ret = [p for p in finder.find(path)]
     ret.sort()
     return ret
 
 
-def _sed_esc(s, escape_all=False):
+def _sed_esc(string, escape_all=False):
     '''
     Escape single quotes and forward slashes
     '''
     special_chars = "^.[$()|*+?{"
-    s = s.replace("'", "'\"'\"'").replace("/", "\/")
+    string = string.replace("'", "'\"'\"'").replace("/", "\/")
     if escape_all:
-        for ch in special_chars:
-            s = s.replace(ch, "\\" + ch)
-    return s
+        for char in special_chars:
+            string = string.replace(char, "\\" + char)
+    return string
 
 
 def sed(path, before, after, limit='', backup='.bak', options='-r -e',
@@ -637,10 +631,11 @@ def contains(path, text):
     if not os.path.exists(path):
         return False
 
+    stripped_text = text.strip()
     try:
-        with BufferedReader(path) as br:
-            for chunk in br:
-                if text.strip() == chunk.strip():
+        with BufferedReader(path) as breader:
+            for chunk in breader:
+                if stripped_text in chunk:
                     return True
         return False
     except (IOError, OSError):
@@ -660,8 +655,8 @@ def contains_regex(path, regex, lchar=''):
         return False
 
     try:
-        with BufferedReader(path) as br:
-            for chunk in br:
+        with BufferedReader(path) as breader:
+            for chunk in breader:
                 if lchar:
                     chunk = chunk.lstrip(lchar)
                 if re.search(regex, chunk, re.MULTILINE):
@@ -683,8 +678,8 @@ def contains_glob(path, glob):
         return False
 
     try:
-        with BufferedReader(path) as br:
-            for chunk in br:
+        with BufferedReader(path) as breader:
+            for chunk in breader:
                 if fnmatch.fnmatch(chunk, glob):
                     return True
             return False
@@ -706,9 +701,9 @@ def append(path, *args):
     '''
     # Largely inspired by Fabric's contrib.files.append()
 
-    with salt.utils.fopen(path, "a") as f:
+    with salt.utils.fopen(path, "a") as ofile:
         for line in args:
-            f.write('{0}\n'.format(line))
+            ofile.write('{0}\n'.format(line))
 
     return 'Wrote {0} lines to "{1}"'.format(len(args), path)
 
@@ -748,7 +743,7 @@ def touch(name, atime=None, mtime=None):
             times = (atime, mtime)
         os.utime(name, times)
 
-    except TypeError as exc:
+    except TypeError:
         raise SaltInvocationError('atime and mtime must be integers')
     except (IOError, OSError) as exc:
         raise CommandExecutionError(exc.strerror)
@@ -956,11 +951,11 @@ def get_managed(
         sfn = __salt__['cp.cache_file'](source, env)
         if not os.path.exists(sfn):
             return sfn, {}, 'File "{0}" could not be found'.format(sfn)
-        if template in salt.utils.templates.template_registry:
+        if template in salt.utils.templates.TEMPLATE_REGISTRY:
             context_dict = defaults if defaults else {}
             if context:
                 context_dict.update(context)
-            data = salt.utils.templates.template_registry[template](
+            data = salt.utils.templates.TEMPLATE_REGISTRY[template](
                     sfn,
                     name=name,
                     source=source,
@@ -981,9 +976,7 @@ def get_managed(
 
         if data['result']:
             sfn = data['data']
-            hsum = ''
-            with salt.utils.fopen(sfn, 'r') as source:
-                hsum = hashlib.md5(source.read()).hexdigest()
+            hsum = get_hash(sfn)
             source_sum = {'hash_type': 'md5',
                           'hsum': hsum}
         else:
@@ -1135,7 +1128,6 @@ def check_managed(
     '''
     Check to see what changes need to be made for a file
     '''
-    changes = {}
     # If the source is a list then find which file exists
     source, source_hash = source_list(source, source_hash, env)
 
@@ -1154,9 +1146,11 @@ def check_managed(
             **kwargs
             )
     if comment:
+        __clean_tmp(sfn)
         return False, comment
     changes = check_file_meta(name, sfn, source, source_sum, user,
                               group, mode, env)
+    __clean_tmp(sfn)
     if changes:
         comment = 'The following values are set to be changed:\n'
         for key, val in changes.items():
@@ -1204,10 +1198,43 @@ def check_file_meta(
         changes['group'] = group
     # Normalize the file mode
     smode = __salt__['config.manage_mode'](stats['mode'])
-    mode  = __salt__['config.manage_mode'](mode)
+    mode = __salt__['config.manage_mode'](mode)
     if not mode is None and mode != smode:
         changes['mode'] = mode
     return changes
+
+
+def get_diff(
+        minionfile,
+        masterfile,
+        env='base'):
+    '''
+    Return unified diff of file compared to file on master
+
+    Example:
+
+        salt \* file.get_diff /home/fred/.vimrc salt://users/fred/.vimrc
+    '''
+    ret = ''
+
+    if not os.path.exists(minionfile):
+        ret = 'File {0} does not exist on the minion'.format(minionfile)
+        return ret
+
+    sfn = __salt__['cp.cache_file'](masterfile, env)
+    if sfn:
+        with nested(salt.utils.fopen(sfn, 'r'),
+                    salt.utils.fopen(minionfile, 'r')) as (src, name_):
+            slines = src.readlines()
+            nlines = name_.readlines()
+        diff = difflib.unified_diff(nlines, slines, minionfile, masterfile)
+        if diff:
+            for line in diff:
+                ret = ret + line
+    else:
+        ret = 'Failed to copy file from master'
+
+    return ret
 
 
 def manage_file(name,
@@ -1233,10 +1260,7 @@ def manage_file(name,
     if os.path.isfile(name):
         # Only test the checksums on files with managed contents
         if source:
-            name_sum = ''
-            hash_func = getattr(hashlib, source_sum['hash_type'])
-            with salt.utils.fopen(name, 'rb') as namefile:
-                name_sum = hash_func(namefile.read()).hexdigest()
+            name_sum = get_hash(name, source_sum['hash_type'])
 
         # Check if file needs to be replaced
         if source and source_sum['hsum'] != name_sum:
@@ -1248,8 +1272,7 @@ def manage_file(name,
             # If the downloaded file came from a non salt server source verify
             # that it matches the intended sum value
             if urlparse(source).scheme != 'salt':
-                with salt.utils.fopen(sfn, 'rb') as dlfile:
-                    dl_sum = hash_func(dlfile.read()).hexdigest()
+                dl_sum = get_hash(sfn, source_sum['hash_type'])
                 if dl_sum != source_sum['hsum']:
                     ret['comment'] = ('File sum set for file {0} of {1} does '
                                       'not match real sum of {2}'
@@ -1308,9 +1331,7 @@ def manage_file(name,
             # If the downloaded file came from a non salt server source verify
             # that it matches the intended sum value
             if urlparse(source).scheme != 'salt':
-                hash_func = getattr(hashlib, source_sum['hash_type'])
-                with salt.utils.fopen(sfn, 'rb') as dlfile:
-                    dl_sum = hash_func(dlfile.read()).hexdigest()
+                dl_sum = get_hash(sfn, source_sum['hash_type'])
                 if dl_sum != source_sum['hsum']:
                     ret['comment'] = ('File sum set for file {0} of {1} does '
                                       'not match real sum of {2}'
@@ -1375,152 +1396,6 @@ def manage_file(name,
             ret['comment'] = 'File ' + name + ' is in the correct state'
         __clean_tmp(sfn)
         return ret
-    # Check changes if the target file exists
-    if os.path.isfile(name):
-        # Only test the checksums on files with managed contents
-        if source:
-            name_sum = ''
-            hash_func = getattr(hashlib, source_sum['hash_type'])
-            with salt.utils.fopen(name, 'rb') as namefile:
-                name_sum = hash_func(namefile.read()).hexdigest()
-
-        # Check if file needs to be replaced
-        if source and source_sum['hsum'] != name_sum:
-            if not sfn:
-                sfn = __salt__['cp.cache_file'](source, env)
-            if not sfn:
-                return _error(
-                    ret, 'Source file {0} not found'.format(source))
-            # If the downloaded file came from a non salt server source verify
-            # that it matches the intended sum value
-            if urlparse(source).scheme != 'salt':
-                with salt.utils.fopen(sfn, 'rb') as dlfile:
-                    dl_sum = hash_func(dlfile.read()).hexdigest()
-                if dl_sum != source_sum['hsum']:
-                    ret['comment'] = ('File sum set for file {0} of {1} does '
-                                      'not match real sum of {2}'
-                                      ).format(
-                                              name,
-                                              source_sum['hsum'],
-                                              dl_sum
-                                              )
-                    ret['result'] = False
-                    return ret
-
-            # Check to see if the files are bins
-            if _is_bin(sfn) or _is_bin(name):
-                ret['changes']['diff'] = 'Replace binary file'
-            else:
-                with nested(salt.utils.fopen(sfn, 'rb'),
-                            salt.utils.fopen(name, 'rb')) as (src, name_):
-                    slines = src.readlines()
-                    nlines = name_.readlines()
-                # Print a diff equivalent to diff -u old new
-                    ret['changes']['diff'] = (''.join(difflib
-                                                      .unified_diff(nlines,
-                                                                    slines)))
-            # Pre requisites are met, and the file needs to be replaced, do it
-            try:
-                salt.utils.copyfile(
-                        sfn,
-                        name,
-                        __salt__['config.backup_mode'](backup),
-                        __opts__['cachedir'])
-            except IOError:
-                __clean_tmp(sfn)
-                return _error(
-                    ret, 'Failed to commit change, permission error')
-
-        ret, perms = check_perms(name, ret, user, group, mode)
-
-        if ret['changes']:
-            ret['comment'] = 'File {0} updated'.format(name)
-
-        elif not ret['changes'] and ret['result']:
-            ret['comment'] = 'File {0} is in the correct state'.format(name)
-        __clean_tmp(sfn)
-        return ret
-    else:
-        # Only set the diff if the file contents is managed
-        if source:
-            # It is a new file, set the diff accordingly
-            ret['changes']['diff'] = 'New file'
-            # Apply the new file
-            if not sfn:
-                sfn = __salt__['cp.cache_file'](source, env)
-            if not sfn:
-                return ret.error(
-                    ret, 'Source file {0} not found'.format(source))
-            # If the downloaded file came from a non salt server source verify
-            # that it matches the intended sum value
-            if urlparse(source).scheme != 'salt':
-                hash_func = getattr(hashlib, source_sum['hash_type'])
-                with salt.utils.fopen(sfn, 'rb') as dlfile:
-                    dl_sum = hash_func(dlfile.read()).hexdigest()
-                if dl_sum != source_sum['hsum']:
-                    ret['comment'] = ('File sum set for file {0} of {1} does '
-                                      'not match real sum of {2}'
-                                      ).format(
-                                              name,
-                                              source_sum['hsum'],
-                                              dl_sum
-                                              )
-                    ret['result'] = False
-                    return ret
-
-            if not os.path.isdir(os.path.dirname(name)):
-                if makedirs:
-                    makedirs(name, user=user, group=group, mode=mode)
-                else:
-                    __clean_tmp(sfn)
-                    return _error(ret, 'Parent directory not present')
-        else:
-            if not os.path.isdir(os.path.dirname(name)):
-                if makedirs:
-                    makedirs(name, user=user, group=group, mode=mode)
-                else:
-                    __clean_tmp(sfn)
-                    return _error(ret, 'Parent directory not present')
-
-            # Create the file, user rw-only if mode will be set to prevent
-            # a small security race problem before the permissions are set
-            if mode:
-                current_umask = os.umask(63)
-
-            # Create a new file when test is False and source is None
-            if not __opts__['test']:
-                if touch(name):
-                    ret['changes']['new'] = 'file {0} created'.format(name)
-                    ret['comment'] = 'Empty file'
-                else:
-                    return _error(
-                        ret, 'Empty file {0} not created'.format(name)
-                    )
-
-            if mode:
-                os.umask(current_umask)
-
-        # Now copy the file contents if there is a source file
-        if sfn:
-            salt.utils.copyfile(
-                    sfn,
-                    name,
-                    __salt__['config.backup_mode'](backup),
-                    __opts__['cachedir'])
-            __clean_tmp(sfn)
-
-        # Check and set the permissions if necessary
-        ret, perms = check_perms(name, ret, user, group, mode)
-
-        if not ret['comment']:
-            ret['comment'] = 'File ' + name + ' updated'
-
-        if __opts__['test']:
-            ret['comment'] = 'File ' + name + ' not updated'
-        elif not ret['changes'] and ret['result']:
-            ret['comment'] = 'File ' + name + ' is in the correct state'
-        __clean_tmp(sfn)
-        return ret
 
 
 def makedirs(path, user=None, group=None, mode=None):
@@ -1533,7 +1408,7 @@ def makedirs(path, user=None, group=None, mode=None):
         # turn on the executable bits for user, group and others.
         # Note: the special bits are set to 0.
         if mode:
-            mode = int(mode[-3:], 8) | 0111
+            mode = int(str(mode)[-3:], 8) | 0111
 
         makedirs_perms(directory, user, group, mode)
         # If a caller such as managed() is invoked  with
@@ -1542,7 +1417,7 @@ def makedirs(path, user=None, group=None, mode=None):
         # follow the principal of least surprise method.
 
 
-def makedirs_perms(name, user=None, group=None, mode=0755):
+def makedirs_perms(name, user=None, group=None, mode='0755'):
     '''
     Taken and modified from os.makedirs to set user, group and mode for each
     directory created.

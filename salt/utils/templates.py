@@ -1,6 +1,7 @@
 '''
 Template render systems
 '''
+
 from __future__ import absolute_import
 
 # Import python libs
@@ -13,15 +14,16 @@ import traceback
 import re
 import io
 
+# Import third party libs
+import jinja2
+import jinja2.ext
+
 # Import salt libs
 import salt.utils
 import salt.exceptions
-
-import jinja2
 from salt.utils.jinja import SaltCacheLoader as JinjaSaltCacheLoader
 
-
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
 class SaltTemplateRenderError(salt.exceptions.SaltException):
@@ -29,8 +31,8 @@ class SaltTemplateRenderError(salt.exceptions.SaltException):
 
 
 # FIXME: also in salt/template.py
-sls_encoding = 'utf-8'  # this one has no BOM.
-sls_encoder = codecs.getencoder(sls_encoding)
+SLS_ENCODING = 'utf-8'  # this one has no BOM.
+SLS_ENCODER = codecs.getencoder(SLS_ENCODING)
 
 
 def wrap_tmpl_func(render_str):
@@ -57,9 +59,10 @@ def wrap_tmpl_func(render_str):
                         print err
                         return False
                     print str(res)
+                    #TODO johannes: close old fh?
                     fh = io.BytesIO(str(res))
 
-                tmplstr=codecs.getreader(encoding=sls_encoding)(fh).read()
+                tmplstr=codecs.getreader(encoding=SLS_ENCODING)(fh).read()
         else:  # assume tmplsrc is file-like.
             tmplstr = tmplsrc.read()
             tmplsrc.close()
@@ -73,7 +76,7 @@ def wrap_tmpl_func(render_str):
             if to_str:  # then render as string
                 return dict(result=True, data=output)
             with tempfile.NamedTemporaryFile('wb', delete=False) as outf:
-                outf.write(sls_encoder(output)[0])
+                outf.write(SLS_ENCODER(output)[0])
                 # Note: If nothing is replaced or added by the rendering
                 #       function, then the contents of the output file will
                 #       be exactly the same as the input.
@@ -87,21 +90,36 @@ def render_jinja_tmpl(tmplstr, context, tmplpath=None):
     opts = context['opts']
     env = context['env']
     loader = None
+    newline = False
+
+    if tmplstr.endswith('\n'):
+        newline = True
+
     if not env:
         if tmplpath:
             # ie, the template is from a file outside the state tree
             loader = jinja2.FileSystemLoader(context, os.path.dirname(tmplpath))
     else:
         loader = JinjaSaltCacheLoader(opts, context['env'])
+    env_args = {'extensions': [], 'loader': loader}
+    if hasattr(jinja2.ext, 'with_'):
+        env_args['extensions'].append('jinja2.ext.with_')
     if opts.get('allow_undefined', False):
-        jinja_env = jinja2.Environment(loader=loader)
+        jinja_env = jinja2.Environment(**env_args)
     else:
         jinja_env = jinja2.Environment(
-                        loader=loader, undefined=jinja2.StrictUndefined)
+                        undefined=jinja2.StrictUndefined,**env_args)
     try:
-        return jinja_env.from_string(tmplstr).render(**context)
+        output = jinja_env.from_string(tmplstr).render(**context)
     except jinja2.exceptions.TemplateSyntaxError, exc:
         raise SaltTemplateRenderError(str(exc))
+
+    # Workaround a bug in Jinja that removes the final newline
+    # (https://github.com/mitsuhiko/jinja2/issues/75)
+    if newline:
+        output += '\n'
+
+    return output
 
 
 def render_mako_tmpl(tmplstr, context, tmplpath=None):
@@ -135,7 +153,7 @@ def render_wempy_tmpl(tmplstr, context, tmplpath=None):
     return Template(tmplstr).render(**context)
 
 
-def py(sfn, string=False, **kwargs):
+def py(sfn, string=False, **kwargs):  # pylint: disable-msg=C0103
     '''
     Render a template from a python source file
 
@@ -170,13 +188,13 @@ def py(sfn, string=False, **kwargs):
                 'data': trb}
 
 
-jinja = wrap_tmpl_func(render_jinja_tmpl)
-mako = wrap_tmpl_func(render_mako_tmpl)
-wempy = wrap_tmpl_func(render_wempy_tmpl)
+JINJA = wrap_tmpl_func(render_jinja_tmpl)
+MAKO = wrap_tmpl_func(render_mako_tmpl)
+WEMPY = wrap_tmpl_func(render_wempy_tmpl)
 
-template_registry = {
-    'jinja': jinja,
-    'mako': mako,
+TEMPLATE_REGISTRY = {
+    'jinja': JINJA,
+    'mako': MAKO,
     'py': py,
-    'wempy': wempy,
+    'wempy': WEMPY,
 }

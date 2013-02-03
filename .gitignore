@@ -34,3 +34,6 @@ htmlcov/
 *~
 *.swp
 .#*
+
+# ignore ctags file
+tags

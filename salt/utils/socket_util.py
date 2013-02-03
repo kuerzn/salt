@@ -1,9 +1,13 @@
 '''
 Define some generic socket functions for network modules
 '''
-# Import Python libs
+
+# Import python libs
 import socket
 from string import ascii_letters, digits
+
+
+# pylint: disable-msg=C0103
 
 def sanitize_host(host):
     '''
@@ -46,6 +50,7 @@ def host_to_ip(host):
         ip = None
     return ip
 
+
 def ip_to_host(ip):
     '''
     Returns the hostname of a given IP
@@ -59,3 +64,5 @@ def ip_to_host(ip):
     except Exception:
         hostname = None
     return hostname
+
+# pylint: enable-msg=C0103

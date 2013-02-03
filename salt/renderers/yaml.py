@@ -1,20 +1,18 @@
 from __future__ import absolute_import
 
-# Import Python Modules
+# Import python libs
 import getopt
 import logging
 import warnings
 
-# Import Salt libs
+# Import salt libs
 from salt.utils.yaml import CustomLoader, load
 from salt.exceptions import SaltRenderError
 
 log = logging.getLogger(__name__)
 
-
-HAS_ORDERED_DICT = True
-
 # code fragment taken from https://gist.github.com/844388
+HAS_ORDERED_DICT = True
 try:
     # included in standard lib from Python 2.7
     from collections import OrderedDict
@@ -41,13 +39,13 @@ Options:
         raise
     if ('-o', '') in opts:
         if HAS_ORDERED_DICT:
-            def Loader(*args):
+            def Loader(*args):  # pylint: disable-msg=C0103
                 return CustomLoader(*args, dictclass=OrderedDict)
             return Loader
-        else:
-            raise SaltRenderError(
-                    'OrderedDict not available! It is required when using '
-                    'the ordered option(-o) with yaml renderer.')
+        raise SaltRenderError(
+            'OrderedDict not available! It is required when using the ordered '
+            'option(-o) with yaml renderer.'
+        )
     return CustomLoader
 
 

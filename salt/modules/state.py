@@ -2,18 +2,18 @@
 Control the state system on the minion
 '''
 
-# Import Python libs
+# Import python libs
 import os
 import copy
 import logging
+import json
 
-# Import Salt libs
+# Import salt libs
 import salt.utils
 import salt.state
 import salt.payload
-from salt.utils.yaml import load as yaml_load
-from salt.utils.yaml import CustomLoader as YamlCustomLoader
-import json
+from salt.utils.yaml import load as _yaml_load
+from salt.utils.yaml import CustomLoader as _YamlCustomLoader
 from salt._compat import string_types
 
 
@@ -133,7 +133,7 @@ def highstate(test=None, **kwargs):
         opts['test'] = test
 
     st_ = salt.state.HighState(opts)
-    ret = st_.call_highstate()
+    ret = st_.call_highstate(exclude=kwargs.get('exclude', []))
     serial = salt.payload.Serial(__opts__)
     cache_file = os.path.join(__opts__['cachedir'], 'highstate.p')
 
@@ -149,7 +149,7 @@ def highstate(test=None, **kwargs):
     return ret
 
 
-def sls(mods, env='base', test=None, **kwargs):
+def sls(mods, env='base', test=None, exclude=None, **kwargs):
     '''
     Execute a set list of state modules from an environment, default
     environment is base
@@ -177,6 +177,13 @@ def sls(mods, env='base', test=None, **kwargs):
     if errors:
         return errors
 
+    if exclude:
+        if isinstance(exclude, str):
+            exclude = exclude.split(',')
+        if '__exclude__' in high:
+            high['__exclude__'].extend(exclude)
+        else:
+            high['__exclude__'] = exclude
     ret = st_.state.call_high(high)
     serial = salt.payload.Serial(__opts__)
     cache_file = os.path.join(__opts__['cachedir'], 'sls.p')
@@ -252,16 +259,24 @@ def show_sls(mods, env='base', test=None, **kwargs):
     return high
 
 
-def show_masterstate():
+def show_top():
     '''
-    Display the data gathered from the master compiled state
-
-    CLI Example::
-
-        salt '*' state.show_masterstate
+    Return the top data that the minion will use for a highstate
     '''
-    st_ = salt.state.RemoteHighState(__opts__, __grains__)
-    return st_.compile_master()
+    st_ = salt.state.HighState(__opts__)
+    return st_.get_top()
+
+# Just commenting out, someday I will get this working
+#def show_masterstate():
+#    '''
+#    Display the data gathered from the master compiled state
+#
+#    CLI Example::
+#
+#        salt '*' state.show_masterstate
+#    '''
+#    st_ = salt.state.RemoteHighState(__opts__, __grains__)
+#    return st_.compile_master()
 
 
 def single(fun, name, test=None, kwval_as='yaml', **kwargs):
@@ -299,10 +314,12 @@ def single(fun, name, test=None, kwval_as='yaml', **kwargs):
 
     if kwval_as == 'yaml':
         def parse_kwval(value):
-            return yaml_load(value, YamlCustomLoader)
+            return _yaml_load(value, _YamlCustomLoader)
     elif kwval_as == 'json':
         def parse_kwval(value):
             return json.loads(value)
+    elif kwval_as is None or kwval_as == 'verbatim':
+        parse_kwval = lambda value: value
     else:
         return 'Unknown format({0}) for state keyword arguments!'.format(
                 kwval_as)

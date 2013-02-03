@@ -1,6 +1,8 @@
 '''
-Manage groups on Linux
+Manage groups on Linux and OpenBSD
 '''
+
+# Import python libs
 try:
     import grp
 except ImportError:
@@ -9,9 +11,9 @@ except ImportError:
 
 def __virtual__():
     '''
-    Set the user module if the kernel is Linux
+    Set the user module if the kernel is Linux or OpenBSD
     '''
-    return 'group' if __grains__.get('kernel', '') == 'Linux' else False
+    return 'group' if __grains__['kernel'] in ('Linux', 'OpenBSD') else False
 
 
 def add(name, gid=None, system=False):
@@ -60,10 +62,17 @@ def info(name):
     except KeyError:
         return {}
     else:
-        return {'name': grinfo.gr_name,
-                'passwd': grinfo.gr_passwd,
-                'gid': grinfo.gr_gid,
-                'members': grinfo.gr_mem}
+        return _format_info(grinfo)
+
+
+def _format_info(data):
+    '''
+    Return formatted information in a pretty way.
+    '''
+    return {'name': data.gr_name,
+            'passwd': data.gr_passwd,
+            'gid': data.gr_gid,
+            'members': data.gr_mem}
 
 
 def getent():
@@ -74,9 +83,14 @@ def getent():
 
         salt '*' group.getent
     '''
+    if 'groupadd_getent' in __context__:
+      return __context__['groupadd_getent']
+
     ret = []
     for grinfo in grp.getgrall():
-        ret.append(info(grinfo.gr_name))
+        ret.append(_format_info(grinfo))
+    __context__['groupadd_getent'] = ret
+
     return ret
 
 

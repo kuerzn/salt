@@ -1,16 +1,18 @@
 '''
 Manage users with the useradd command
 '''
+
+# Import python libs
 try:
     import grp
     import pwd
 except ImportError:
     pass
-
 import os
 import logging
 from copy import deepcopy
 
+# From salt libs
 from salt._compat import string_types
 
 log = logging.getLogger(__name__)
@@ -140,7 +142,7 @@ def chuid(name, uid):
     pre_info = info(name)
     if uid == pre_info['uid']:
         return True
-    cmd = 'pw usermod -u {0} {1}'.format(uid, name)
+    cmd = 'pw usermod -u {0} -n {1}'.format(uid, name)
     __salt__['cmd.run'](cmd)
     post_info = info(name)
     if post_info['uid'] != pre_info['uid']:
@@ -159,7 +161,7 @@ def chgid(name, gid):
     pre_info = info(name)
     if gid == pre_info['gid']:
         return True
-    cmd = 'pw usermod -g {0} {1}'.format(gid, name)
+    cmd = 'pw usermod -g {0} -n {1}'.format(gid, name)
     __salt__['cmd.run'](cmd)
     post_info = info(name)
     if post_info['gid'] != pre_info['gid']:

@@ -1,6 +1,7 @@
 '''
 Minion side functions for salt-cp
 '''
+
 # Import python libs
 import os
 import logging
@@ -22,7 +23,6 @@ def recv(files, dest):
     '''
     ret = {}
     for path, data in files.items():
-        final = ''
         if os.path.basename(path) == os.path.basename(dest)\
                 and not os.path.isdir(dest):
             final = dest
@@ -42,12 +42,20 @@ def recv(files, dest):
     return ret
 
 
+def _mk_client():
+    '''
+    Create a file client and add it to the context
+    '''
+    if not 'cp.fileclient' in __context__:
+        __context__['cp.fileclient'] = salt.fileclient.get_file_client(__opts__)
+
+
 def _render_filenames(path, dest, env, template):
     if not template:
         return (path, dest)
 
     # render the path as a template using path_template_engine as the engine
-    if template not in salt.utils.templates.template_registry:
+    if template not in salt.utils.templates.TEMPLATE_REGISTRY:
         raise CommandExecutionError(
             'Attempted to render file paths with unavailable engine '
             '{0}'.format(template)
@@ -65,7 +73,7 @@ def _render_filenames(path, dest, env, template):
         tmp_path_fn = salt.utils.mkstemp()
         with salt.utils.fopen(tmp_path_fn, 'w+') as fp_:
             fp_.write(contents)
-        data = salt.utils.templates.template_registry[template](
+        data = salt.utils.templates.TEMPLATE_REGISTRY[template](
             tmp_path_fn,
             to_str=True,
             **kwargs
@@ -93,14 +101,36 @@ def get_file(path, dest, env='base', makedirs=False, template=None, gzip=None):
     CLI Example::
 
         salt '*' cp.get_file salt://path/to/file /minion/dest
+
+    Template rendering can be enabled on both the source and destination file names
+    like so::
+
+        salt '*' cp.get_file "salt://{{grains.os}}/vimrc" /etc/vimrc template=jinja
+
+    This example would instruct all Salt minions to download the vimrc from a
+    directory with the same name as their os grain and copy it to /etc/vimrc
+
+    For larger files, the cp.get_file module also supports gzip compression.
+    Because gzip is CPU-intensive, this should only be used in
+    scenarios where the compression ratio is very high (e.g. pretty-printed JSON
+    or YAML files).
+
+    Use the *gzip* named argument to enable it.  Valid values are 1..9,
+    where 1 is the lightest compression and 9 the heaviest.  1 uses the least CPU
+    on the master (and minion), 9 uses the most.
     '''
     (path, dest) = _render_filenames(path, dest, env, template)
 
     if not hash_file(path, env):
         return ''
     else:
-        client = salt.fileclient.get_file_client(__opts__)
-        return client.get_file(path, dest, makedirs, env, gzip)
+        _mk_client()
+        return __context__['cp.fileclient'].get_file(
+                path,
+                dest,
+                makedirs,
+                env,
+                gzip)
 
 
 def get_template(path, dest, template='jinja', env='base', **kwargs):
@@ -111,7 +141,7 @@ def get_template(path, dest, template='jinja', env='base', **kwargs):
 
         salt '*' cp.get_template salt://path/to/template /minion/dest
     '''
-    client = salt.fileclient.get_file_client(__opts__)
+    _mk_client()
     if not 'salt' in kwargs:
         kwargs['salt'] = __salt__
     if not 'pillar' in kwargs:
@@ -120,7 +150,13 @@ def get_template(path, dest, template='jinja', env='base', **kwargs):
         kwargs['grains'] = __grains__
     if not 'opts' in kwargs:
         kwargs['opts'] = __opts__
-    return client.get_template(path, dest, template, False, env, **kwargs)
+    return __context__['cp.fileclient'].get_template(
+            path,
+            dest,
+            template,
+            False,
+            env,
+            **kwargs)
 
 
 def get_dir(path, dest, env='base', template=None, gzip=None):
@@ -130,11 +166,13 @@ def get_dir(path, dest, env='base', template=None, gzip=None):
     CLI Example::
 
         salt '*' cp.get_dir salt://path/to/dir/ /minion/dest
+
+    get_dir supports the same template and gzip arguments as get_file.
     '''
     (path, dest) = _render_filenames(path, dest, env, template)
 
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.get_dir(path, dest, env, gzip)
+    _mk_client()
+    return __context__['cp.fileclient'].get_dir(path, dest, env, gzip)
 
 
 def get_url(path, dest, env='base'):
@@ -146,8 +184,8 @@ def get_url(path, dest, env='base'):
         salt '*' cp.get_url salt://my/file /tmp/mine
         salt '*' cp.get_url http://www.slashdot.org /tmp/index.html
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.get_url(path, dest, False, env)
+    _mk_client()
+    return __context__['cp.fileclient'].get_url(path, dest, False, env)
 
 
 def get_file_str(path, env='base'):
@@ -172,11 +210,14 @@ def cache_file(path, env='base'):
 
         salt '*' cp.cache_file salt://path/to/file
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    result = client.cache_file(path, env)
+    _mk_client()
+    result = __context__['cp.fileclient'].cache_file(path, env)
     if not result:
-        log.error('Unable to cache file "{0}" from env '
-                  '"{1}".'.format(path,env))
+        log.error(
+            'Unable to cache file "{0}" from env "{1}".'.format(
+                path, env
+            )
+        )
     return result
 
 
@@ -190,8 +231,8 @@ def cache_files(paths, env='base'):
 
         salt '*' cp.cache_files salt://pathto/file1,salt://pathto/file1
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.cache_files(paths, env)
+    _mk_client()
+    return __context__['cp.fileclient'].cache_files(paths, env)
 
 
 def cache_dir(path, env='base', include_empty=False):
@@ -202,8 +243,8 @@ def cache_dir(path, env='base', include_empty=False):
 
         salt '*' cp.cache_dir salt://path/to/dir
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.cache_dir(path, env, include_empty)
+    _mk_client()
+    return __context__['cp.fileclient'].cache_dir(path, env, include_empty)
 
 
 def cache_master(env='base'):
@@ -214,8 +255,8 @@ def cache_master(env='base'):
 
         salt '*' cp.cache_master
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.cache_master(env)
+    _mk_client()
+    return __context__['cp.fileclient'].cache_master(env)
 
 
 def cache_local_file(path):
@@ -240,8 +281,8 @@ def cache_local_file(path):
             return path_cached
 
     # The file hasn't been cached or has changed; cache it
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.cache_local_file(path)
+    _mk_client()
+    return __context__['cp.fileclient'].cache_local_file(path)
 
 
 def list_states(env='base'):
@@ -252,8 +293,8 @@ def list_states(env='base'):
 
         salt '*' cp.list_states
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.list_states(env)
+    _mk_client()
+    return __context__['cp.fileclient'].list_states(env)
 
 
 def list_master(env='base'):
@@ -264,8 +305,8 @@ def list_master(env='base'):
 
         salt '*' cp.list_master
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.file_list(env)
+    _mk_client()
+    return __context__['cp.fileclient'].file_list(env)
 
 
 def list_master_dirs(env='base'):
@@ -276,8 +317,8 @@ def list_master_dirs(env='base'):
 
         salt '*' cp.list_master_dirs
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.dir_list(env)
+    _mk_client()
+    return __context__['cp.fileclient'].dir_list(env)
 
 
 def list_minion(env='base'):
@@ -288,8 +329,8 @@ def list_minion(env='base'):
 
         salt '*' cp.list_minion
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.file_local_list(env)
+    _mk_client()
+    return __context__['cp.fileclient'].file_local_list(env)
 
 
 def is_cached(path, env='base'):
@@ -301,8 +342,8 @@ def is_cached(path, env='base'):
 
         salt '*' cp.is_cached salt://path/to/file
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.is_cached(path, env)
+    _mk_client()
+    return __context__['cp.fileclient'].is_cached(path, env)
 
 
 def hash_file(path, env='base'):
@@ -315,5 +356,5 @@ def hash_file(path, env='base'):
 
         salt '*' cp.hash_file salt://path/to/file
     '''
-    client = salt.fileclient.get_file_client(__opts__)
-    return client.hash_file(path, env)
+    _mk_client()
+    return __context__['cp.fileclient'].hash_file(path, env)

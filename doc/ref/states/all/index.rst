@@ -11,15 +11,21 @@ Full list of builtin state modules
     :template: autosummary.rst.tmpl
 
     alias
+    alternatives
     cmd
     cron
+    debconfmod
     file
     gem
     git
     group
     hg
     host
+    keyboard
     kmod
+    layman
+    locale
+    makeconf
     module
     mongodb_database
     mongodb_user
@@ -32,8 +38,10 @@ Full list of builtin state modules
     pip
     pkgng
     pkg
+    pkgrepo
     postgres_database
     postgres_user
+    postgres_group
     rabbitmq_user
     rabbitmq_vhost
     rvm
@@ -45,5 +53,6 @@ Full list of builtin state modules
     supervisord
     svn
     sysctl
+    timezone
     user
     virtualenv

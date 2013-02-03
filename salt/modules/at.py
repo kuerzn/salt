@@ -5,34 +5,29 @@ Also, a 'tag' feature has been added to more
 easily tag jobs.
 '''
 
+# Import python libs
 import re
 import time
 import datetime
 
+# Import salt libs
 import salt.utils
-
-__outputter__ = {
-    'atc': 'txt',
-    'at': 'yaml',
-    'atq': 'yaml',
-    'atrm': 'yaml',
-}
 
 # OS Families that should work (Ubuntu and Debian are the default)
 # TODO: Refactor some of this module to remove the checks for binaries
 
 # Tested on OpenBSD 5.0
-bsd = ('OpenBSD', 'FreeBSD')
+BSD = ('OpenBSD', 'FreeBSD')
 
 # Known not to work
-bad = ('Windows',)
+BAD = ('Windows',)
 
 
 def __virtual__():
     '''
     Most everything has the ability to support at(1)
     '''
-    if __grains__['os'] in bad or not salt.utils.which('at'):
+    if __grains__['os'] in BAD or not salt.utils.which('at'):
         return False
     return 'at'
 
@@ -90,7 +85,7 @@ def atq(tag=None):
         if __grains__['os_family'] == 'RedHat':
             job, spec = line.split('\t')
             specs = spec.split()
-        elif __grains__['os'] in bsd:
+        elif __grains__['os'] in BSD:
             if line.startswith(' Rank'):
                 continue
             else:
@@ -118,7 +113,7 @@ def atq(tag=None):
             if tmp:
                 job_tag = tmp.groups()[0]
 
-        if __grains__['os'] in bsd:
+        if __grains__['os'] in BSD:
             job = str(job)
         else:
             job = int(job)
@@ -148,7 +143,6 @@ def atrm(*args):
         salt '*' at.atrm all
         salt '*' at.atrm all [tag]
     '''
-    opts = ''
 
     # Need to do this here also since we use atq()
     if not salt.utils.which('at'):
@@ -178,7 +172,7 @@ def atrm(*args):
     return ret
 
 
-def at(*args, **kwargs):
+def at(*args, **kwargs):  # pylint: disable-msg=C0103
     '''
     Add a job to the queue.
 
@@ -191,7 +185,6 @@ def at(*args, **kwargs):
         salt '*' at.at 12:05am '/sbin/reboot' tag=reboot
         salt '*' at.at '3:05am +3 days' 'bin/myscript' tag=nightly runas=jim
     '''
-    echo_cmd = ''
 
     if len(args) < 2:
         return {'jobs': []}
@@ -234,7 +227,7 @@ def at(*args, **kwargs):
 
     output = output.split()[1]
 
-    if __grains__['os'] in bsd:
+    if __grains__['os'] in BSD:
         return atq(str(output))
     else:
         return atq(int(output))
