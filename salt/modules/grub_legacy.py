@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Support for GRUB Legacy
 '''
@@ -6,21 +7,24 @@ Support for GRUB Legacy
 import os
 
 # Import salt libs
-from salt.utils import fopen, memoize
+import salt.utils
+import salt.utils.decorators as decorators
 from salt.exceptions import CommandExecutionError
+
+# Define the module's virtual name
+__virtualname__ = 'grub'
 
 
 def __virtual__():
     '''
     Only load the module if grub is installed
     '''
-    conf = _detect_conf()
-    if os.path.exists(conf):
-        return 'grub'
+    if os.path.exists(_detect_conf()):
+        return __virtualname__
     return False
 
 
-@memoize
+@decorators.memoize
 def _detect_conf():
     '''
     GRUB conf location differs depending on distro
@@ -35,7 +39,9 @@ def version():
     '''
     Return server version from grub --version
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' grub.version
     '''
@@ -48,36 +54,44 @@ def conf():
     '''
     Parse GRUB conf file
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' grub.conf
     '''
     stanza = ''
     stanzas = []
-    instanza = 0
+    in_stanza = False
     ret = {}
     pos = 0
     try:
-        with fopen(_detect_conf(), 'r') as _fp:
+        with salt.utils.fopen(_detect_conf(), 'r') as _fp:
             for line in _fp:
                 if line.startswith('#'):
                     continue
                 if line.startswith('\n'):
-                    instanza = 0
+                    in_stanza = False
                     if 'title' in stanza:
                         stanza += 'order {0}'.format(pos)
                         pos += 1
                         stanzas.append(stanza)
                     stanza = ''
                     continue
-                if line.startswith('title'):
-                    instanza = 1
-                if instanza == 1:
+                if line.strip().startswith('title'):
+                    if in_stanza:
+                        stanza += 'order {0}'.format(pos)
+                        pos += 1
+                        stanzas.append(stanza)
+                        stanza = ''
+                    else:
+                        in_stanza = True
+                if in_stanza:
                     stanza += line
-                if instanza == 0:
+                if not in_stanza:
                     key, value = _parse_line(line)
                     ret[key] = value
-            if instanza == 1:
+            if in_stanza:
                 if not line.endswith('\n'):
                     line += '\n'
                 stanza += line

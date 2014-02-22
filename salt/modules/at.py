@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Wrapper module for at(1)
 
@@ -19,17 +20,14 @@ import salt.utils
 # Tested on OpenBSD 5.0
 BSD = ('OpenBSD', 'FreeBSD')
 
-# Known not to work
-BAD = ('Windows',)
-
 
 def __virtual__():
     '''
     Most everything has the ability to support at(1)
     '''
-    if __grains__['os'] in BAD or not salt.utils.which('at'):
+    if salt.utils.is_windows() or salt.utils.which('at') is None:
         return False
-    return 'at'
+    return True
 
 
 def _cmd(binary, *args):
@@ -48,7 +46,9 @@ def atq(tag=None):
     List all queued and running jobs or only those with
     an optional 'tag'.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' at.atq
         salt '*' at.atq [tag]
@@ -79,7 +79,7 @@ def atq(tag=None):
 
         # Jobs created with at.at() will use the following
         # comment to denote a tagged job.
-        job_kw_regex = re.compile('^### SALT: (\w+)')
+        job_kw_regex = re.compile(r'^### SALT: (\w+)')
 
         # Redhat/CentOS
         if __grains__['os_family'] == 'RedHat':
@@ -137,7 +137,9 @@ def atrm(*args):
     '''
     Remove jobs from the queue.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' at.atrm <jobid> <jobid> .. <jobid>
         salt '*' at.atrm all
@@ -172,14 +174,16 @@ def atrm(*args):
     return ret
 
 
-def at(*args, **kwargs):  # pylint: disable-msg=C0103
+def at(*args, **kwargs):  # pylint: disable=C0103
     '''
     Add a job to the queue.
 
     The 'timespec' follows the format documented in the
     at(1) manpage.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' at.at <timespec> <cmd> [tag=<tag>] [runas=<user>]
         salt '*' at.at 12:05am '/sbin/reboot' tag=reboot
@@ -239,7 +243,9 @@ def atc(jobid):
     id. This is mostly for debugging so the output will
     just be text.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' at.atc <jobid>
     '''
@@ -253,3 +259,104 @@ def atc(jobid):
         return {'error': 'invalid job id "{0}"'.format(str(jobid))}
 
     return output
+
+
+def _atq(**kwargs):
+    '''
+    Return match jobs list
+    '''
+
+    jobs = []
+
+    runas = kwargs.get('runas', None)
+    tag = kwargs.get('tag', None)
+    hour = kwargs.get('hour', None)
+    minute = kwargs.get('minute', None)
+    day = kwargs.get('day', None)
+    month = kwargs.get('month', None)
+    year = kwargs.get('year', None)
+    if year and len(str(year)) == 2:
+        year = "20" + str(year)
+
+    jobinfo = atq()['jobs']
+    if not jobinfo:
+        return {'jobs': jobs}
+
+    for job in jobinfo:
+
+        if not runas:
+            pass
+        elif runas == job['user']:
+            pass
+        else:
+            continue
+
+        if not tag:
+            pass
+        elif tag == job['tag']:
+            pass
+        else:
+            continue
+
+        if not hour:
+            pass
+        elif "%02d" % int(hour) == job['time'].split(':')[0]:
+            pass
+        else:
+            continue
+
+        if not minute:
+            pass
+        elif "%02d" % int(minute) == job['time'].split(':')[1]:
+            pass
+        else:
+            continue
+
+        if not day:
+            pass
+        elif "%02d" % int(day) == job['date'].split('-')[2]:
+            pass
+        else:
+            continue
+
+        if not month:
+            pass
+        elif "%02d" % int(month) == job['date'].split('-')[1]:
+            pass
+        else:
+            continue
+
+        if not year:
+            pass
+        elif year == job['date'].split('-')[0]:
+            pass
+        else:
+            continue
+
+        jobs.append(job)
+
+    if not jobs:
+        note = 'No match jobs or time format error'
+        return {'jobs': jobs, 'note': note}
+
+    return {'jobs': jobs}
+
+
+def jobcheck(**kwargs):
+    '''
+    Check the job from queue.
+    The kwargs dict include 'hour minute day month year tag runas'
+    Other parameters will be ignored.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' at.jobcheck runas=jam day=13
+        salt '*' at.jobcheck day=13 month=12 year=13 tag=rose
+    '''
+
+    if not kwargs:
+        return {'error': 'You have given a condition'}
+
+    return _atq(**kwargs)

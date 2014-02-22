@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Execute puppet routines
 '''
@@ -60,6 +61,9 @@ class _Puppet(object):
 
         self.vardir = '/var/lib/puppet'
         self.confdir = '/etc/puppet'
+        if 'Enterprise' in __salt__['cmd.run']('puppet --version'):
+            self.vardir = '/var/opt/lib/pe-puppet'
+            self.confdir = '/etc/puppetlabs/puppet'
 
     def __repr__(self):
         '''
@@ -113,20 +117,19 @@ def run(*args, **kwargs):
     subcommand. Following positional arguments should be ordered with arguments
     required by the subcommand first, followed by non-keyvalue pair options.
     Tags are specified by a tag keyword and comma separated list of values. --
-    http://projects.puppetlabs.com/projects/1/wiki/Using_Tags
+    http://docs.puppetlabs.com/puppet/latest/reference/lang_tags.html
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt '*' puppet.run
-
         salt '*' puppet.run tags=basefiles::edit,apache::server
-
+        salt '*' puppet.run agent onetime no-daemonize no-usecacheonfailure no-splay ignorecache
         salt '*' puppet.run debug
-
         salt '*' puppet.run apply /a/b/manifest.pp modulepath=/a/b/modules tags=basefiles::edit,apache::server
     '''
     _check_puppet()
-
     puppet = _Puppet()
 
     if args:
@@ -150,32 +153,34 @@ def noop(*args, **kwargs):
     Execute a puppet noop run and return a dict with the stderr, stdout,
     return code, etc. Usage is the same as for puppet.run.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' puppet.noop
-
         salt '*' puppet.noop tags=basefiles::edit,apache::server
-
         salt '*' puppet.noop debug
-
         salt '*' puppet.noop apply /a/b/manifest.pp modulepath=/a/b/modules tags=basefiles::edit,apache::server
     '''
     args += ('noop',)
     return run(*args, **kwargs)
 
 
-def facts():
+def facts(puppet=False):
     '''
     Run facter and return the results
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' puppet.facts
     '''
     _check_facter()
 
     ret = {}
-    output = __salt__['cmd.run']('facter')
+    opt_puppet = '--puppet' if puppet else ''
+    output = __salt__['cmd.run']('facter {0}'.format(opt_puppet))
 
     # Loop over the facter output and  properly
     # parse it into a nice dictionary for using
@@ -190,17 +195,20 @@ def facts():
     return ret
 
 
-def fact(name):
+def fact(name, puppet=False):
     '''
     Run facter for a specific fact
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' puppet.fact kernel
     '''
     _check_facter()
 
-    ret = __salt__['cmd.run']('facter {0}'.format(name))
+    opt_puppet = '--puppet' if puppet else ''
+    ret = __salt__['cmd.run']('facter {0} {1}'.format(opt_puppet, name))
     if not ret:
         return ''
     return ret

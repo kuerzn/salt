@@ -2,10 +2,10 @@
 Client ACL system
 =================
 
-The salt client acl system is a means to allow system users other than root to
+The salt client ACL system is a means to allow system users other than root to
 have access to execute select salt commands on minions from the master.
 
-The client acl system is configured in the master configuration file via the
+The client ACL system is configured in the master configuration file via the
 ``client_acl`` configuration option. Under the ``client_acl`` configuration
 option the users open to send commands are specified and then a list of regular
 expressions which specify the minion functions which will be made available to
@@ -18,7 +18,7 @@ specified user. This configuration is much like the ``peer`` configuration:
       thatch:
         - .*
       fred:
-        - ping.*
+        - test.*
         - pkg.*
 
 Permission Issues
@@ -30,6 +30,13 @@ users specified:
 .. code-block:: bash
 
     chmod 755 /var/cache/salt /var/cache/salt/jobs /var/run/salt
+
+.. note::
+
+    In addition to the changes above you will also need to modify the
+    permissions of /var/log/salt and the existing log file. If you do not
+    wish to do this then you must disable logging or Salt will generate
+    errors as it cannot write to the logs as the system users.
 
 If you are upgrading from earlier versions of salt you must also remove any
 existing user keys and re-start the Salt master:

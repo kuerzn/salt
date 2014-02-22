@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Manage information about files on the minion, set/read user, group
 data
@@ -10,25 +11,45 @@ data
 
 # Import python libs
 import os
-import time
+import stat
 import os.path
-import hashlib
 import logging
+# pylint: disable=W0611
+import tempfile  # do not remove. Used in salt.modules.file.__clean_tmp
+import itertools  # same as above, do not remove, it's used in __clean_tmp
+import contextlib  # do not remove, used in imported file.py functions
+import difflib  # do not remove, used in imported file.py functions
+import errno  # do not remove, used in imported file.py functions
+import shutil  # do not remove, used in imported file.py functions
+from salt.exceptions import CommandExecutionError, SaltInvocationError
+# pylint: enable=W0611
 
 # Import third party libs
 try:
     import win32security
-    import ntsecuritycon as con
+    import win32file
+    from pywintypes import error as pywinerror
     HAS_WINDOWS_MODULES = True
 except ImportError:
     HAS_WINDOWS_MODULES = False
 
 # Import salt libs
 import salt.utils
-from salt.exceptions import SaltInvocationError
+from salt.modules.file import (check_hash,  # pylint: disable=W0611
+        directory_exists, get_managed, mkdir, makedirs, makedirs_perms,
+        check_managed, check_perms, patch, remove, source_list, sed_contains,
+        touch, append, contains, contains_regex, contains_regex_multiline,
+        contains_glob, patch, uncomment, sed, find, psed, get_sum, check_hash,
+        get_hash, comment, manage_file, file_exists, get_diff, get_managed,
+        __clean_tmp, check_managed, check_file_meta, _binary_replace,
+        contains_regex, access, copy, readdir, rmdir, truncate)
 
+from salt.utils import namespaced_function as _namespaced_function
 
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'file'
 
 
 def __virtual__():
@@ -37,7 +58,52 @@ def __virtual__():
     '''
     if salt.utils.is_windows():
         if HAS_WINDOWS_MODULES:
-            return 'file'
+            global check_perms, get_managed, makedirs_perms, manage_file
+            global source_list, mkdir, __clean_tmp, makedirs, file_exists
+            global check_managed, check_file_meta, remove, append
+            global directory_exists, patch, sed_contains, touch, contains
+            global contains_regex, contains_regex_multiline, contains_glob
+            global sed, find, psed, get_sum, check_hash, get_hash
+            global uncomment, comment, get_diff
+            global access, copy, readdir, rmdir, truncate
+
+            remove = _namespaced_function(remove, globals())
+            append = _namespaced_function(append, globals())
+            check_perms = _namespaced_function(check_perms, globals())
+            get_managed = _namespaced_function(get_managed, globals())
+            check_managed = _namespaced_function(check_managed, globals())
+            check_file_meta = _namespaced_function(check_file_meta, globals())
+            makedirs_perms = _namespaced_function(makedirs_perms, globals())
+            makedirs = _namespaced_function(makedirs, globals())
+            manage_file = _namespaced_function(manage_file, globals())
+            source_list = _namespaced_function(source_list, globals())
+            mkdir = _namespaced_function(mkdir, globals())
+            file_exists = _namespaced_function(file_exists, globals())
+            __clean_tmp = _namespaced_function(__clean_tmp, globals())
+            directory_exists = _namespaced_function(directory_exists, globals())
+            patch = _namespaced_function(patch, globals())
+            sed_contains = _namespaced_function(sed_contains, globals())
+            touch = _namespaced_function(touch, globals())
+            contains = _namespaced_function(contains, globals())
+            contains_regex = _namespaced_function(contains_regex, globals())
+            contains_regex_multiline = _namespaced_function(contains_regex_multiline, globals())
+            contains_glob = _namespaced_function(contains_glob, globals())
+            sed = _namespaced_function(sed, globals())
+            find = _namespaced_function(find, globals())
+            psed = _namespaced_function(psed, globals())
+            get_sum = _namespaced_function(get_sum, globals())
+            check_hash = _namespaced_function(check_hash, globals())
+            get_hash = _namespaced_function(get_hash, globals())
+            uncomment = _namespaced_function(uncomment, globals())
+            comment = _namespaced_function(comment, globals())
+            get_diff = _namespaced_function(get_diff, globals())
+            access = _namespaced_function(access, globals())
+            copy = _namespaced_function(copy, globals())
+            readdir = _namespaced_function(readdir, globals())
+            rmdir = _namespaced_function(rmdir, globals())
+            truncate = _namespaced_function(truncate, globals())
+
+            return __virtualname__
         log.warn(salt.utils.required_modules_error(__file__, __doc__))
     return False
 
@@ -52,12 +118,16 @@ def gid_to_group(gid):
     '''
     Convert the group id to the group name on this system
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.gid_to_group S-1-5-21-626487655-2533044672-482107328-1010
     '''
+    if not gid:
+        return False
     sid = win32security.GetBinarySid(gid)
-    name, domain, type = win32security.LookupAccountSid(None, sid)
+    name, domain, account_type = win32security.LookupAccountSid(None, sid)
     return name
 
 
@@ -65,11 +135,13 @@ def group_to_gid(group):
     '''
     Convert the group to the gid on this system
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.group_to_gid administrators
     '''
-    sid, domain, type = win32security.LookupAccountName(None, group)
+    sid, domain, account_type = win32security.LookupAccountName(None, group)
     return win32security.ConvertSidToStringSid(sid)
 
 
@@ -77,7 +149,9 @@ def get_gid(path):
     '''
     Return the id of the group that owns a given file
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.get_gid c:\\temp\\test.txt
     '''
@@ -94,7 +168,9 @@ def get_group(path):
     '''
     Return the group that owns a given file
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.get_group c:\\temp\\test.txt
     '''
@@ -104,7 +180,7 @@ def get_group(path):
         path, win32security.OWNER_SECURITY_INFORMATION
     )
     owner_sid = secdesc.GetSecurityDescriptorOwner()
-    name, domain, type = win32security.LookupAccountSid(None, owner_sid)
+    name, domain, account_type = win32security.LookupAccountSid(None, owner_sid)
     return name
 
 
@@ -112,12 +188,14 @@ def uid_to_user(uid):
     '''
     Convert a uid to a user name
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.uid_to_user S-1-5-21-626487655-2533044672-482107328-1010
     '''
     sid = win32security.GetBinarySid(uid)
-    name, domain, type = win32security.LookupAccountSid(None, sid)
+    name, domain, account_type = win32security.LookupAccountSid(None, sid)
     return name
 
 
@@ -125,11 +203,13 @@ def user_to_uid(user):
     '''
     Convert user name to a uid
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.user_to_uid myusername
     '''
-    sid, domain, type = win32security.LookupAccountName(None, user)
+    sid, domain, account_type = win32security.LookupAccountName(None, user)
     return win32security.ConvertSidToStringSid(sid)
 
 
@@ -137,7 +217,9 @@ def get_uid(path):
     '''
     Return the id of the user that owns a given file
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.get_uid c:\\temp\\test.txt
     '''
@@ -154,25 +236,28 @@ def get_mode(path):
     '''
     Return the mode of a file
 
-    Right now we're just returning 777
+    Right now we're just returning None
     because Windows' doesn't have a mode
     like Linux
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.get_mode /etc/passwd
     '''
     if not os.path.exists(path):
         return -1
-    mode = 777
-    return mode
+    return None
 
 
 def get_user(path):
     '''
     Return the user that owns a given file
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.get_user c:\\temp\\test.txt
     '''
@@ -180,7 +265,7 @@ def get_user(path):
         path, win32security.OWNER_SECURITY_INFORMATION
     )
     owner_sid = secdesc.GetSecurityDescriptorOwner()
-    name, domain, type = win32security.LookupAccountSid(None, owner_sid)
+    name, domain, account_type = win32security.LookupAccountSid(None, owner_sid)
     return name
 
 
@@ -188,403 +273,241 @@ def chown(path, user, group):
     '''
     Chown a file, pass the file the desired user and group
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.chown c:\\temp\\test.txt myusername administrators
     '''
-    # I think this function isn't working correctly yet
-    gsd = win32security.GetFileSecurity(
-        path, win32security.DACL_SECURITY_INFORMATION
-    )
-    uid = user_to_uid(user)
-    gid = group_to_gid(group)
     err = ''
-    if uid == '':
+    # get SID object for user
+    try:
+        userSID, domainName, objectType = win32security.LookupAccountName(None, user)
+    except pywinerror:
         err += 'User does not exist\n'
-    if gid == '':
+
+    # get SID object for group
+    try:
+        groupSID, domainName, objectType = win32security.LookupAccountName(None, group)
+    except pywinerror:
         err += 'Group does not exist\n'
+
     if not os.path.exists(path):
-        err += 'File not found'
+        err += 'File not found\n'
     if err:
         return err
 
-    dacl = win32security.ACL()
-    dacl.AddAccessAllowedAce(
-        win32security.ACL_REVISION, con.FILE_ALL_ACCESS,
-        win32security.GetBinarySid(uid)
-    )
-    dacl.AddAccessAllowedAce(
-        win32security.ACL_REVISION, con.FILE_ALL_ACCESS,
-        win32security.GetBinarySid(gid)
-    )
-    gsd.SetSecurityDescriptorDacl(1, dacl, 0)
-    return win32security.SetFileSecurity(
-        path, win32security.DACL_SECURITY_INFORMATION, gsd
-    )
+    # set owner and group
+    securityInfo = win32security.OWNER_SECURITY_INFORMATION + win32security.GROUP_SECURITY_INFORMATION
+    win32security.SetNamedSecurityInfo(path, win32security.SE_FILE_OBJECT, securityInfo, userSID, groupSID, None, None)
+    return None
 
 
 def chgrp(path, group):
     '''
     Change the group of a file
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' file.chgrp c:\\temp\\test.txt administrators
     '''
-    # I think this function isn't working correctly yet
-    gid = group_to_gid(group)
     err = ''
-    if gid == '':
+    # get SID object for group
+    try:
+        groupSID, domainName, objectType = win32security.LookupAccountName(None, group)
+    except pywinerror:
         err += 'Group does not exist\n'
+
     if not os.path.exists(path):
-        err += 'File not found'
+        err += 'File not found\n'
     if err:
         return err
-    user = get_user(path)
-    return chown(path, user, group)
+
+    # set group
+    securityInfo = win32security.GROUP_SECURITY_INFORMATION
+    win32security.SetNamedSecurityInfo(path, win32security.SE_FILE_OBJECT, securityInfo, None, groupSID, None, None)
+    return None
 
 
-def get_sum(path, form='md5'):
+def stats(path, hash_type='md5', follow_symlinks=False):
     '''
-    Return the sum for the given file, default is md5, sha1, sha224, sha256,
-    sha384, sha512 are supported
+    Return a dict containing the stats for a given file
 
-    CLI Example::
+    CLI Example:
 
-        salt '*' file.get_sum /etc/passwd sha512
+    .. code-block:: bash
+
+        salt '*' file.stats /etc/passwd
     '''
-    if not os.path.isfile(path):
-        return 'File not found'
-    try:
-        return getattr(hashlib, form)(
-            salt.utils.fopen(path, 'rb').read()
-        ).hexdigest()
-    except (IOError, OSError) as err:
-        return 'File Error: {0}'.format(err)
-    except AttributeError:
-        return 'Hash {0} not supported'.format(form)
-    except NameError:
-        return 'Hashlib unavailable - please fix your python install'
-    except Exception as err:
-        return str(err)
-
-
-def find(path, **kwargs):
-    '''
-    Approximate the Unix find(1) command and return a list of paths that
-    meet the specified criteria.
-
-    The options include match criteria::
-
-        name    = path-glob                 # case sensitive
-        iname   = path-glob                 # case insensitive
-        regex   = path-regex                # case sensitive
-        iregex  = path-regex                # case insensitive
-        type    = file-types                # match any listed type
-        user    = users                     # match any listed user
-        group   = groups                    # match any listed group
-        size    = [+-]number[size-unit]     # default unit = byte
-        mtime   = interval                  # modified since date
-        grep    = regex                     # search file contents
-
-    and/or actions::
-
-        delete [= file-types]               # default type = 'f'
-        exec    = command [arg ...]         # where {} is replaced by pathname
-        print  [= print-opts]
-
-    The default action is 'print=path'.
-
-    file-glob::
-
-        *                = match zero or more chars
-        ?                = match any char
-        [abc]            = match a, b, or c
-        [!abc] or [^abc] = match anything except a, b, and c
-        [x-y]            = match chars x through y
-        [!x-y] or [^x-y] = match anything except chars x through y
-        {a,b,c}          = match a or b or c
-
-    path-regex: a Python re (regular expression) pattern to match pathnames
-
-    file-types: a string of one or more of the following::
-
-        a: all file types
-        b: block device
-        c: character device
-        d: directory
-        p: FIFO (named pipe)
-        f: plain file
-        l: symlink
-        s: socket
-
-    users: a space and/or comma separated list of user names and/or uids
-
-    groups: a space and/or comma separated list of group names and/or gids
-
-    size-unit::
-
-        b: bytes
-        k: kilobytes
-        m: megabytes
-        g: gigabytes
-        t: terabytes
-
-    interval::
-
-        [<num>w] [<num>[d]] [<num>h] [<num>m] [<num>s]
-
-        where:
-            w: week
-            d: day
-            h: hour
-            m: minute
-            s: second
-
-    print-opts: a comma and/or space separated list of one or more of the
-    following::
-
-        group: group name
-        md5:   MD5 digest of file contents
-        mode:  file permissions (as integer)
-        mtime: last modification time (as time_t)
-        name:  file basename
-        path:  file absolute path
-        size:  file size in bytes
-        type:  file type
-        user:  user name
-
-    CLI Examples::
-
-        salt '*' file.find / type=f name=\*.bak size=+10m
-        salt '*' file.find /var mtime=+30d size=+10m print=path,size,mtime
-        salt '*' file.find /var/log name=\*.[0-9] mtime=+30d size=+10m delete
-    '''
-    try:
-        finder = salt.utils.find.Finder(kwargs)
-    except ValueError as ex:
-        return 'error: {0}'.format(ex)
-
-    ret = [p for p in finder.find(path)]
-    ret.sort()
+    ret = {}
+    if not os.path.exists(path):
+        return ret
+    if follow_symlinks:
+        pstat = os.stat(path)
+    else:
+        pstat = os.lstat(path)
+    ret['inode'] = pstat.st_ino
+    ret['uid'] = pstat.st_uid
+    ret['gid'] = pstat.st_gid
+    ret['group'] = 0
+    ret['user'] = 0
+    ret['atime'] = pstat.st_atime
+    ret['mtime'] = pstat.st_mtime
+    ret['ctime'] = pstat.st_ctime
+    ret['size'] = pstat.st_size
+    ret['mode'] = str(oct(stat.S_IMODE(pstat.st_mode)))
+    ret['sum'] = get_sum(path, hash_type)
+    ret['type'] = 'file'
+    if stat.S_ISDIR(pstat.st_mode):
+        ret['type'] = 'dir'
+    if stat.S_ISCHR(pstat.st_mode):
+        ret['type'] = 'char'
+    if stat.S_ISBLK(pstat.st_mode):
+        ret['type'] = 'block'
+    if stat.S_ISREG(pstat.st_mode):
+        ret['type'] = 'file'
+    if stat.S_ISLNK(pstat.st_mode):
+        ret['type'] = 'link'
+    if stat.S_ISFIFO(pstat.st_mode):
+        ret['type'] = 'pipe'
+    if stat.S_ISSOCK(pstat.st_mode):
+        ret['type'] = 'socket'
+    ret['target'] = os.path.realpath(path)
     return ret
 
 
-def _sed_esc(string):
+def get_attributes(path):
     '''
-    Escape single quotes and forward slashes
+    Return a dictionary object with the Windows
+    file attributes for a file.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' file.get_attributes c:\\temp\\a.txt
     '''
-    return '{0}'.format(string).replace("'", "'\"'\"'").replace("/", "\/")
-
-
-def sed(path, before, after, limit='', backup='.bak', options='-r -e',
-        flags='g'):
-    '''
-    Make a simple edit to a file
-
-    Equivalent to::
-
-        sed <backup> <options> "/<limit>/ s/<before>/<after>/<flags> <file>"
-
-    path
-        The full path to the file to be edited
-    before
-        A pattern to find in order to replace with ``after``
-    after
-        Text that will replace ``before``
-    limit : ``''``
-        An initial pattern to search for before searching for ``before``
-    backup : ``.bak``
-        The file will be backed up before edit with this file extension;
-        **WARNING:** each time ``sed``/``comment``/``uncomment`` is called will
-        overwrite this backup
-    options : ``-r -e``
-        Options to pass to sed
-    flags : ``g``
-        Flags to modify the sed search; e.g., ``i`` for case-insensitve pattern
-        matching
-
-    Forward slashes and single quotes will be escaped automatically in the
-    ``before`` and ``after`` patterns.
-
-    CLI Example::
-
-        salt '*' file.sed /etc/httpd/httpd.conf 'LogLevel warn' 'LogLevel info'
-
-    .. versionadded:: 0.9.5
-    '''
-    # Largely inspired by Fabric's contrib.files.sed()
-
-    before = _sed_esc(before)
-    after = _sed_esc(after)
-
-    cmd = r"sed {backup}{options} '{limit}s/{before}/{after}/{flags}' {path}".format(
-            backup='-i{0} '.format(backup) if backup else '',
-            options=options,
-            limit='/{0}/ '.format(limit) if limit else '',
-            before=before,
-            after=after,
-            flags=flags,
-            path=path)
-
-    return __salt__['cmd.run'](cmd)
-
-
-def uncomment(path, regex, char='#', backup='.bak'):
-    '''
-    Uncomment specified commented lines in a file
-
-    path
-        The full path to the file to be edited
-    regex
-        A regular expression used to find the lines that are to be uncommented.
-        This regex should not include the comment character. A leading ``^``
-        character will be stripped for convenience (for easily switching
-        between comment() and uncomment()).
-    char : ``#``
-        The character to remove in order to uncomment a line; if a single
-        whitespace character follows the comment it will also be removed
-    backup : ``.bak``
-        The file will be backed up before edit with this file extension;
-        **WARNING:** each time ``sed``/``comment``/``uncomment`` is called will
-        overwrite this backup
-
-    CLI Example::
-
-        salt '*' file.uncomment /etc/hosts.deny 'ALL: PARANOID'
-
-    .. versionadded:: 0.9.5
-    '''
-    # Largely inspired by Fabric's contrib.files.uncomment()
-
-    return __salt__['file.sed'](path,
-        before=r'^([[:space:]]*){0}[[:space:]]?'.format(char),
-        after=r'\1',
-        limit=regex.lstrip('^'),
-        backup=backup)
-
-
-def comment(path, regex, char='#', backup='.bak'):
-    '''
-    Comment out specified lines in a file
-
-    path
-        The full path to the file to be edited
-    regex
-        A regular expression used to find the lines that are to be commented;
-        this pattern will be wrapped in parenthesis and will move any
-        preceding/trailing ``^`` or ``$`` characters outside the parenthesis
-        (e.g., the pattern ``^foo$`` will be rewritten as ``^(foo)$``)
-    char : ``#``
-        The character to be inserted at the beginning of a line in order to
-        comment it out
-    backup : ``.bak``
-        The file will be backed up before edit with this file extension
-
-        .. warning::
-
-            This backup will be overwritten each time ``sed`` / ``comment`` /
-            ``uncomment`` is called. Meaning the backup will only be useful
-            after the first invocation.
-
-    CLI Example::
-
-        salt '*' file.comment /etc/modules pcspkr
-
-    .. versionadded:: 0.9.5
-    '''
-    # Largely inspired by Fabric's contrib.files.comment()
-
-    regex = "{0}({1}){2}".format(
-            '^' if regex.startswith('^') else '',
-            regex.lstrip('^').rstrip('$'),
-            '$' if regex.endswith('$') else '')
-
-    return __salt__['file.sed'](
-        path,
-        before=regex,
-        after=r'{0}\1'.format(char),
-        backup=backup)
-
-
-def contains(path, text, limit=''):
-    '''
-    Return True if the file at ``path`` contains ``text``
-
-    CLI Example::
-
-        salt '*' file.contains /etc/crontab 'mymaintenance.sh'
-
-    .. versionadded:: 0.9.5
-    '''
-    # Largely inspired by Fabric's contrib.files.contains()
-
+    err = ''
     if not os.path.exists(path):
-        return False
+        err += 'File not found\n'
+    if err:
+        return err
 
-    result = __salt__['file.sed'](path, text, '&', limit=limit, backup='',
-            options='-n -r -e', flags='gp')
+    # set up dictionary for attribute values
+    attributes = {}
 
-    return bool(result)
+    # Get cumulative int value of attributes
+    intAttributes = win32file.GetFileAttributes(path)
+
+    # Assign individual attributes
+    attributes['archive'] = (intAttributes & 32) == 32
+    attributes['reparsePoint'] = (intAttributes & 1024) == 1024
+    attributes['compressed'] = (intAttributes & 2048) == 2048
+    attributes['directory'] = (intAttributes & 16) == 16
+    attributes['encrypted'] = (intAttributes & 16384) == 16384
+    attributes['hidden'] = (intAttributes & 2) == 2
+    attributes['normal'] = (intAttributes & 128) == 128
+    attributes['notIndexed'] = (intAttributes & 8192) == 8192
+    attributes['offline'] = (intAttributes & 4096) == 4096
+    attributes['readonly'] = (intAttributes & 1) == 1
+    attributes['system'] = (intAttributes & 4) == 4
+    attributes['temporary'] = (intAttributes & 256) == 256
+
+    # check if it's a Mounted Volume
+    attributes['mountedVolume'] = False
+    if attributes['reparsePoint'] is True and attributes['directory'] is True:
+        fileIterator = win32file.FindFilesIterator(path)
+        findDataTuple = fileIterator.next()
+        if findDataTuple[6] == 0xA0000003:
+            attributes['mountedVolume'] = True
+    # check if it's a soft (symbolic) link
+
+    # Note:  os.path.islink() does not work in
+    #   Python 2.7 for the Windows NTFS file system.
+    #   The following code does, however, work (tested in Windows 8)
+
+    attributes['symbolicLink'] = False
+    if attributes['reparsePoint'] is True:
+        fileIterator = win32file.FindFilesIterator(path)
+        findDataTuple = fileIterator.next()
+        if findDataTuple[6] == 0xA000000C:
+            attributes['symbolicLink'] = True
+
+    return attributes
 
 
-def append(path, *args):
+def set_attributes(path, archive=None, hidden=None, normal=None,
+                   notIndexed=None, readonly=None, system=None, temporary=None):
     '''
-    Append text to the end of a file
+    Set file attributes for a file.  Note that the normal attribute
+    means that all others are false.  So setting it will clear all others.
 
-    CLI Example::
+    CLI Example:
 
-        salt '*' file.append /etc/motd \\
-                "With all thine offerings thou shalt offer salt."\\
-                "Salt is what makes things taste bad when it isn't in them."
+    .. code-block:: bash
 
-    .. versionadded:: 0.9.5
+        salt '*' file.set_attributes c:\\temp\\a.txt normal=True
+        salt '*' file.set_attributes c:\\temp\\a.txt readonly=True hidden=True
     '''
-    # Largely inspired by Fabric's contrib.files.append()
+    err = ''
+    if not os.path.exists(path):
+        err += 'File not found\n'
+    if normal:
+        if archive or hidden or notIndexed or readonly or system or temporary:
+            err += 'Normal attribute may not be used with any other attributes\n'
+        else:
+            return win32file.SetFileAttributes(path, 128)
+    if err:
+        return err
+    # Get current attributes
+    intAttributes = win32file.GetFileAttributes(path)
+    # individually set or clear bits for appropriate attributes
+    if archive is not None:
+        if archive:
+            intAttributes |= 0x20
+        else:
+            intAttributes &= 0xFFDF
+    if hidden is not None:
+        if hidden:
+            intAttributes |= 0x2
+        else:
+            intAttributes &= 0xFFFD
+    if notIndexed is not None:
+        if notIndexed:
+            intAttributes |= 0x2000
+        else:
+            intAttributes &= 0xDFFF
+    if readonly is not None:
+        if readonly:
+            intAttributes |= 0x1
+        else:
+            intAttributes &= 0xFFFE
+    if system is not None:
+        if system:
+            intAttributes |= 0x4
+        else:
+            intAttributes &= 0xFFFB
+    if temporary is not None:
+        if temporary:
+            intAttributes |= 0x100
+        else:
+            intAttributes &= 0xFEFF
+    return win32file.SetFileAttributes(path, intAttributes)
 
-    with salt.utils.fopen(path, "a") as ofile:
-        for line in args:
-            ofile.write('{0}\n'.format(line))
 
-    return "Wrote {0} lines to '{1}'".format(len(args), path)
-
-
-def touch(name, atime=None, mtime=None):
+def set_mode(path, mode):
     '''
-    Just like 'nix's "touch" command, create a file if it
-    doesn't exist or simply update the atime and mtime if
-    it already does.
+    Set the mode of a file
 
-    atime:
-        Access time in Unix epoch time
-    mtime:
-        Last modification in Unix epoch time
+    This just calls get_mode, which returns None because we don't use mode on
+    Windows
 
-    CLI Example::
+    CLI Example:
 
-        salt '*' file.touch /var/log/emptyfile
+    .. code-block:: bash
 
-    .. versionadded:: 0.9.5
+        salt '*' file.set_mode /etc/passwd 0644
     '''
-    if atime and atime.isdigit():
-        atime = int(atime)
-    if mtime and mtime.isdigit():
-        mtime = int(mtime)
-    try:
-        with salt.utils.fopen(name, "a"):
-            if not atime and not mtime:
-                times = None
-            elif not mtime and atime:
-                times = (atime, time.time())
-            elif not atime and mtime:
-                times = (time.time(), mtime)
-            else:
-                times = (atime, mtime)
-            os.utime(name, times)
-    except TypeError:
-        msg = "atime and mtime must be integers"
-        raise SaltInvocationError(msg)
-    except (IOError, OSError):
-        return False
-
-    return os.path.exists(name)
+    return get_mode(path)

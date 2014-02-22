@@ -1,15 +1,19 @@
+# -*- coding: utf-8 -*-
 '''
+Use LDAP data as a Pillar source
+
 This pillar module parses a config file (specified in the salt master config),
 and executes a series of LDAP searches based on that config.  Data returned by
-these searches is aggregrated, with data items found later in the LDAP search
+these searches is aggregated, with data items found later in the LDAP search
 order overriding data found earlier on.
+
 The final result set is merged with the pillar data.
 '''
 
 # Import python libs
+from __future__ import print_function
 import os
 import logging
-import traceback
 
 # Import salt libs
 from salt.exceptions import SaltInvocationError
@@ -18,8 +22,7 @@ from salt.exceptions import SaltInvocationError
 import yaml
 from jinja2 import Environment, FileSystemLoader
 try:
-    import ldap
-    import ldap.modlist
+    import ldap  # pylint: disable=W0611
     HAS_LDAP = True
 except ImportError:
     HAS_LDAP = False
@@ -103,7 +106,7 @@ def _result_to_dict(data, result, conf):
                         data[skey] = [sval]
                     else:
                         data[skey].append(sval)
-    print 'Returning data {0}'.format(data)
+    print('Returning data {0}'.format(data))
     return data
 
 
@@ -140,17 +143,14 @@ def _do_search(conf):
     except IndexError:  # we got no results for this search
         result = {}
     except Exception:
-        trace = traceback.format_exc()
         log.critical(
-            'Failed to retrieve pillar data from LDAP: {0}'.format(
-                trace
-            )
+            'Failed to retrieve pillar data from LDAP:\n', exc_info=True
         )
         return {}
     return result
 
 
-def ext_pillar(pillar, config_file):
+def ext_pillar(minion_id, pillar, config_file):
     '''
     Execute LDAP searches and return the aggregated data
     '''
@@ -174,7 +174,7 @@ def ext_pillar(pillar, config_file):
     for source in opts['search_order']:
         config = opts[source]
         result = _do_search(config)
-        print 'source {0} got result {1}'.format(source, result)
+        print('source {0} got result {1}'.format(source, result))
         if result:
             data = _result_to_dict(data, result, config)
     return data

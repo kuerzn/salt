@@ -1,16 +1,37 @@
+# -*- coding: utf-8 -*-
+
 '''
 Test the ssh_known_hosts state
 '''
+
+# Import python libs
 import os
 import shutil
-import integration
 
+# Import Salt Testing libs
+from salttesting import skipIf
+from salttesting.helpers import (
+    destructiveTest,
+    ensure_in_syspath,
+    with_system_account
+)
+ensure_in_syspath('../../')
+
+try:
+    from salttesting.helpers import skip_if_binaries_missing
+except ImportError:
+    from integration import skip_if_binaries_missing
+
+# Import salt libs
+import integration
+import salt.utils
 
 KNOWN_HOSTS = os.path.join(integration.TMP, 'known_hosts')
 GITHUB_FINGERPRINT = '16:27:ac:a5:76:28:2d:36:63:1b:56:4d:eb:df:a6:48'
-GITHUB_IP = '207.97.227.239'
+GITHUB_IP = '192.30.252.129'
 
 
+@skip_if_binaries_missing(['ssh', 'ssh-keygen'], check_all=True)
 class SSHKnownHostsStateTest(integration.ModuleCase,
                              integration.SaltReturnAssertsMixIn):
     '''
@@ -39,10 +60,10 @@ class SSHKnownHostsStateTest(integration.ModuleCase,
         ret = self.run_state('ssh_known_hosts.present', **kwargs)
         try:
             self.assertSaltTrueReturn(ret)
-        except AssertionError, err:
+        except AssertionError as err:
             try:
                 self.assertInSaltComment(
-                    ret, 'Unable to receive remote host key'
+                    'Unable to receive remote host key', ret
                 )
                 self.skipTest('Unable to receive remote host key')
             except AssertionError:
@@ -59,7 +80,7 @@ class SSHKnownHostsStateTest(integration.ModuleCase,
 
         # test again, nothing is about to be changed
         ret = self.run_state('ssh_known_hosts.present', test=True, **kwargs)
-        self.assertSaltNoneReturn(ret)
+        self.assertSaltTrueReturn(ret)
 
         # then add a record for IP address
         ret = self.run_state('ssh_known_hosts.present',
@@ -130,6 +151,98 @@ class SSHKnownHostsStateTest(integration.ModuleCase,
         # test again
         ret = self.run_state('ssh_known_hosts.absent', test=True, **kwargs)
         self.assertSaltNoneReturn(ret)
+
+
+class SSHAuthStateTests(integration.ModuleCase,
+                        integration.SaltReturnAssertsMixIn):
+
+    @destructiveTest
+    @skipIf(os.geteuid() != 0, 'you must be root to run this test')
+    @with_system_account('issue_7409', on_existing='delete', delete=True)
+    def test_issue_7409_no_linebreaks_between_keys(self, username):
+
+        userdetails = self.run_function('user.info', [username])
+        user_ssh_dir = os.path.join(userdetails['home'], '.ssh')
+        authorized_keys_file = os.path.join(user_ssh_dir, 'authorized_keys')
+
+        ret = self.run_state(
+            'file.managed',
+            name=authorized_keys_file,
+            user=username,
+            makedirs=True,
+            # Explicit no ending line break
+            contents='ssh-rsa AAAAB3NzaC1kc3MAAACBAL0sQ9fJ5bYTEyY== root'
+        )
+
+        ret = self.run_state(
+            'ssh_auth.present',
+            name='AAAAB3NzaC1kcQ9J5bYTEyZ==',
+            enc='ssh-rsa',
+            user=username,
+            comment=username
+        )
+        self.assertSaltTrueReturn(ret)
+        self.assertSaltStateChangesEqual(
+            ret, {'AAAAB3NzaC1kcQ9J5bYTEyZ==': 'New'}
+        )
+        self.assertEqual(
+            open(authorized_keys_file, 'r').read(),
+            'ssh-rsa AAAAB3NzaC1kc3MAAACBAL0sQ9fJ5bYTEyY== root\n'
+            'ssh-rsa AAAAB3NzaC1kcQ9J5bYTEyZ== {0}\n'.format(username)
+        )
+
+    @destructiveTest
+    @skipIf(os.geteuid() != 0, 'you must be root to run this test')
+    @with_system_account('issue_10198', on_existing='delete', delete=True)
+    def test_issue_10198_keyfile_from_another_env(self, username=None):
+        userdetails = self.run_function('user.info', [username])
+        user_ssh_dir = os.path.join(userdetails['home'], '.ssh')
+        authorized_keys_file = os.path.join(user_ssh_dir, 'authorized_keys')
+
+        key_fname = 'issue_10198.id_rsa.pub'
+
+        # Create the keyfile that we expect to get back on the state call
+        with salt.utils.fopen(os.path.join(integration.TMP_PRODENV_STATE_TREE, key_fname), 'w') as kfh:
+            kfh.write(
+                'ssh-rsa AAAAB3NzaC1kcQ9J5bYTEyZ== {0}\n'.format(username)
+            )
+
+        # Create a bogus key file on base environment
+        with salt.utils.fopen(os.path.join(integration.TMP_STATE_TREE, key_fname), 'w') as kfh:
+            kfh.write(
+                'ssh-rsa BAAAB3NzaC1kcQ9J5bYTEyZ== {0}\n'.format(username)
+            )
+
+        ret = self.run_state(
+            'ssh_auth.present',
+            name='Setup Keys',
+            source='salt://{0}?saltenv=prod'.format(key_fname),
+            enc='ssh-rsa',
+            user=username,
+            comment=username
+        )
+        self.assertSaltTrueReturn(ret)
+        self.assertEqual(
+            open(authorized_keys_file, 'r').read(),
+            'ssh-rsa AAAAB3NzaC1kcQ9J5bYTEyZ== {0}\n'.format(username)
+        )
+
+        os.unlink(authorized_keys_file)
+
+        ret = self.run_state(
+            'ssh_auth.present',
+            name='Setup Keys',
+            source='salt://{0}'.format(key_fname),
+            enc='ssh-rsa',
+            user=username,
+            comment=username,
+            saltenv='prod'
+        )
+        self.assertSaltTrueReturn(ret)
+        self.assertEqual(
+            open(authorized_keys_file, 'r').read(),
+            'ssh-rsa AAAAB3NzaC1kcQ9J5bYTEyZ== {0}\n'.format(username)
+        )
 
 
 if __name__ == '__main__':

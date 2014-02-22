@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 '''
 tests for host state
 '''
@@ -6,9 +8,13 @@ tests for host state
 import os
 import shutil
 
+# Import Salt Testing libs
+from salttesting.helpers import ensure_in_syspath
+ensure_in_syspath('../../')
+
 # Import salt libs
-import salt.utils
 import integration
+import salt.utils
 
 HFILE = os.path.join(integration.TMP, 'hosts')
 

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 #/usr/bin/env python
 '''
 The minionswarm script will start a group of salt minions with different ids
@@ -5,6 +7,7 @@ on a single system to test scale capabilities
 '''
 
 # Import Python Libs
+from __future__ import print_function
 import os
 import pwd
 import time
@@ -36,6 +39,13 @@ def parse():
             dest='master',
             default='salt',
             help='The location of the salt master that this swarm will serve')
+    parser.add_option('--name',
+            '-n',
+            dest='name',
+            default='ms',
+            help=('Give the minions an alternative id prefix, this is used '
+                  'when minions from many systems are being aggregated onto '
+                  'a single master'))
     parser.add_option('-k',
             '--keep-modules',
             dest='keep',
@@ -56,6 +66,12 @@ def parse():
             dest='root_dir',
             default=None,
             help='Override the minion root_dir config')
+    parser.add_option(
+            '-c', '--config-dir', default='/etc/salt',
+            help=('Pass in an alternative configuration directory. Default: '
+                  '%default')
+        )
+    parser.add_option('-u', '--user', default=pwd.getpwuid(os.getuid()).pw_name)
 
     options, args = parser.parse_args()
 
@@ -98,8 +114,8 @@ class Swarm(object):
         print('Creating shared pki keys for the swarm on: {0}'.format(path))
         subprocess.call(
             'salt-key -c {0} --gen-keys minion --gen-keys-dir {0} '
-            '--key-logfile {1}'.format(
-                path, os.path.join(path, 'keys.log')
+            '--log-file {1} --user {2}'.format(
+                path, os.path.join(path, 'keys.log'), self.opts['user'],
             ), shell=True
         )
         print('Keys generated')
@@ -109,12 +125,14 @@ class Swarm(object):
         '''
         Create a config file for a single minion
         '''
-        minion_id = 'ms-{0}'.format(str(idx).zfill(self.__zfill))
+        minion_id = '{0}-{1}'.format(
+                self.opts['name'],
+                str(idx).zfill(self.__zfill)
+                )
 
         dpath = os.path.join(self.swarm_root, minion_id)
         os.makedirs(dpath)
 
-        import sys
         minion_pkidir = os.path.join(dpath, 'pki')
         os.makedirs(minion_pkidir)
         minion_pem = os.path.join(self.pki, 'minion.pem')
@@ -124,7 +142,7 @@ class Swarm(object):
 
         data = {
             'id': minion_id,
-            'user': pwd.getpwuid(os.getuid()).pw_name,
+            'user': self.opts['user'],
             'pki_dir': minion_pkidir,
             'cachedir': os.path.join(dpath, 'cache'),
             'master': self.opts['master'],
@@ -137,14 +155,11 @@ class Swarm(object):
         path = os.path.join(dpath, 'minion')
 
         if self.opts['keep']:
-            ignore = set()
             keep = self.opts['keep'].split(',')
             modpath = os.path.join(os.path.dirname(salt.__file__), 'modules')
-            for fn_ in os.listdir(modpath):
-                if fn_.split('.')[0] in keep:
-                    continue
-                ignore.add(fn_.split('.')[0])
-            data['disable_modules'] = list(ignore)
+            fn_prefixes = (fn_.partition('.')[0] for fn_ in os.listdir(modpath))
+            ignore = [fn_prefix for fn_prefix in fn_prefixes if fn_prefix not in keep]
+            data['disable_modules'] = ignore
 
         with open(path, 'w+') as fp_:
             yaml.dump(data, fp_)
@@ -211,8 +226,7 @@ class Swarm(object):
     def shutdown(self):
         print('Killing any remaining running minions')
         subprocess.call(
-            'kill -KILL $(ps aux | grep python | grep "salt-minion" '
-            '| awk \'{print $2}\')',
+            'pkill -KILL -f "python.*salt-minion"',
             shell=True
         )
         if not self.opts['no_clean']:

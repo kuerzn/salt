@@ -6,6 +6,23 @@ The intent of the troubleshooting section is to introduce solutions to a
 number of common issues encountered by users and the tools that are available
 to aid in developing States and Salt code.
 
+Troubleshooting the Salt Master
+===============================
+
+If your Salt master is having issues such as minions not returning data, slow
+execution times, or a variety of other issues the 
+:doc:`Salt master troubleshooting page
+</topics/troubleshooting/master>` contains details on troubleshooting the most
+common issues encountered.
+
+Troubleshooting the Salt Minion
+===============================
+
+In the event that your Salt minion is having issues a variety of solutions
+and suggestions are available at the :doc:`Salt minion troubleshooting page
+</topics/troubleshooting/minion>`.
+
+
 Running in the Foreground
 =========================
 
@@ -13,10 +30,10 @@ A great deal of information is available via the debug logging system, if you
 are having issues with minions connecting or not starting run the minion and/or
 master in the foreground:
 
-.. code-block:: sh
+.. code-block:: bash
 
-  # salt-master -l debug
-  # salt-minion -l debug
+  salt-master -l debug
+  salt-minion -l debug
 
 Anyone wanting to run Salt daemons via a process supervisor such as `monit`_,
 `runit`_, or `supervisord`_, should omit the ``-d`` argument to the daemons and
@@ -31,15 +48,15 @@ What Ports do the Master and Minion Need Open?
 
 No ports need to be opened up on each minion. For the master, TCP ports 4505
 and 4506 need to be open. If you've put both your Salt master and minion in
-debug mode and don't see an acknowledgement that your minion has connected,
+debug mode and don't see an acknowledgment that your minion has connected,
 it could very well be a firewall.
 
 You can check port connectivity from the minion with the nc command:
 
-.. code-block:: sh
+.. code-block:: bash
 
-  # nc -v -z salt.master.ip 4505
-  # nc -v -z salt.master.ip 4506
+  nc -v -z salt.master.ip 4505
+  nc -v -z salt.master.ip 4506
 
 There is also a :doc:`firewall configuration</topics/tutorials/firewall>`
 document that might help as well.
@@ -53,6 +70,8 @@ Salt.
 .. _`AppArmor`: http://wiki.apparmor.net/index.php/Main_Page
 
 
+.. _using-salt-call:
+
 Using salt-call
 ===============
 
@@ -60,17 +79,23 @@ The ``salt-call`` command was originally developed for aiding in the development
 of new Salt modules. Since then, many applications have been developed for
 running any Salt module locally on a minion. These range from the original
 intent of salt-call, development assistance, to gathering more verbose output
-from calls like :doc:`state.highstate</ref/modules/all/salt.modules.state>`.
+from calls like :mod:`state.highstate <salt.modules.state.highstate>`.
 
-When developing the State Tree it is generally recommended to invoke
-state.highstate with salt-call. This displays far more information
-about the highstate execution than calling it remotely. For even more
-verbosity, increase the loglevel with the same argument as ``salt-minion``:
+When creating your state tree, it is generally recommended to invoke
+:mod:`state.highstate <salt.modules.state.highstate>` with ``salt-call``. This
+displays far more information about the highstate execution than calling it
+remotely. For even more verbosity, increase the loglevel with the same argument
+as ``salt-minion``:
 
-.. code-block:: sh
+.. code-block:: bash
 
     salt-call -l debug state.highstate
 
+The main difference between using ``salt`` and using ``salt-call`` is that
+``salt-call`` is run from the minion, and it only runs the selected function on
+that minion. By contrast, ``salt`` is run from the master, and requires you to
+specify the minions on which to run the command using salt's :doc:`targeting
+system </topics/targeting/index>`.
 
 Too many open files
 ===================
@@ -79,7 +104,7 @@ The salt-master needs at least 2 sockets per host that connects to it, one for
 the Publisher and one for response port. Thus, large installations may, upon
 scaling up the number of minions accessing a given master, encounter:
 
-.. code-block:: sh
+.. code-block:: bash
 
     12:45:29,289 [salt.master    ][INFO    ] Starting Salt worker process 38
     Too many open files
@@ -88,7 +113,7 @@ scaling up the number of minions accessing a given master, encounter:
 The solution to this would be to check the number of files allowed to be
 opened by the user running salt-master (root by default):
 
-.. code-block:: sh
+.. code-block:: bash
 
     [root@salt-master ~]# ulimit -n
     1024
@@ -111,7 +136,7 @@ field in ``net.ipv4.tcp_rmem`` and ``net.ipv4.tcp_wmem`` to at least 16777216.
 
 You can do it manually with something like:
 
-.. code-block:: sh
+.. code-block:: bash
 
     # echo 16777216 > /proc/sys/net/core/rmem_max
     # echo 16777216 > /proc/sys/net/core/wmem_max
@@ -159,8 +184,13 @@ to this issue is to set the execution context of ``salt-call`` and
 
 .. code-block:: bash
 
-    # chcon -t system_u:system_r:rpm_exec_t:s0 /usr/bin/salt-minion
-    # chcon -t system_u:system_r:rpm_exec_t:s0 /usr/bin/salt-call
+    # CentOS 5 and RHEL 5:
+    chcon -t system_u:system_r:rpm_exec_t:s0 /usr/bin/salt-minion
+    chcon -t system_u:system_r:rpm_exec_t:s0 /usr/bin/salt-call
+
+    # CentOS 6 and RHEL 6:
+    chcon system_u:object_r:rpm_exec_t:s0 /usr/bin/salt-minion
+    chcon system_u:object_r:rpm_exec_t:s0 /usr/bin/salt-call
 
 This works well, because the ``rpm_exec_t`` context has very broad control over
 other types.
@@ -179,9 +209,8 @@ needs to be run with the ``python26`` executable.
 Common YAML Gotchas
 ===================
 
-An extensive list of
-:doc:`YAML idiosyncrasies</topics/troubleshooting/yaml_idiosyncrasies>`
-has been compiled.
+An extensive list of :doc:`YAML idiosyncrasies
+</topics/troubleshooting/yaml_idiosyncrasies>` has been compiled.
 
 Live Python Debug Output
 ========================
@@ -193,15 +222,26 @@ sure the master of minion are running in the foreground:
 
 .. code-block:: bash
 
-    # salt-master -l debug
-    # salt-minion -l debug
+    salt-master -l debug
+    salt-minion -l debug
 
-The pass the signal to the master or minion when it seems to be unresponsive:
+Then pass the signal to the master or minion when it seems to be unresponsive:
 
 .. code-block:: bash
 
     killall -SIGUSR1 salt-master
     killall -SIGUSR1 salt-minion
 
+Also under BSD and Mac OS X in addition to SIGUSR1 signal, debug subroutine set
+up for SIGINFO which has an advantage of being sent by Ctrl+T shortcut.
+
 When filing an issue or sending questions to the mailing list for a problem
 with an unresponsive daemon this information can be invaluable.
+
+Salt 0.16.x minions cannot communicate with a 0.17.x master
+===========================================================
+
+As of release 0.17.1 you can no longer run different versions of Salt on your
+Master and Minion servers. This is due to a protocol change for security
+purposes. The Salt team will continue to attempt to ensure versions are as
+backwards compatible as possible.

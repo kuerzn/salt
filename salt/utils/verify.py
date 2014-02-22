@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 A few checks to make sure the environment is sane
 '''
@@ -31,11 +32,15 @@ def zmq_version():
     '''
     ZeroMQ python bindings >= 2.1.9 are required
     '''
-    import zmq
+    try:
+        import zmq
+    except Exception:
+        # Return True for local mode
+        return True
     ver = zmq.__version__
     # The last matched group can be None if the version
     # is something like 3.1 and that will work properly
-    match = re.match('^(\d+)\.(\d+)(?:\.(\d+))?', ver)
+    match = re.match(r'^(\d+)\.(\d+)(?:\.(\d+))?', ver)
 
     # Fallthrough and hope for the best
     if not match:
@@ -80,16 +85,37 @@ def zmq_version():
         if is_console_configured():
             log.critical(msg)
         else:
-            sys.stderr.write("CRITICAL {0}\n".format(msg))
+            sys.stderr.write('CRITICAL {0}\n'.format(msg))
     return False
+
+
+def lookup_family(hostname):
+    '''
+    Lookup a hostname and determine its address family. The first address returned
+    will be AF_INET6 if the system is IPv6-enabled, and AF_INET otherwise.
+    '''
+    # If lookups fail, fall back to AF_INET sockets (and v4 addresses).
+    fallback = socket.AF_INET
+    try:
+        hostnames = socket.getaddrinfo(
+            hostname or None, None, socket.AF_UNSPEC, socket.SOCK_STREAM
+        )
+        if not hostnames:
+            return fallback
+        h = hostnames[0]
+        return h[0]
+    except socket.gaierror:
+        return fallback
 
 
 def verify_socket(interface, pub_port, ret_port):
     '''
     Attempt to bind to the sockets to verify that they are available
     '''
-    pubsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    retsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    addr_family = lookup_family(interface)
+    pubsock = socket.socket(addr_family, socket.SOCK_STREAM)
+    retsock = socket.socket(addr_family, socket.SOCK_STREAM)
     try:
         pubsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         pubsock.bind((interface, int(pub_port)))
@@ -98,13 +124,16 @@ def verify_socket(interface, pub_port, ret_port):
         retsock.bind((interface, int(ret_port)))
         retsock.close()
         result = True
-    except Exception:
-        msg = ("Unable to bind socket, this might not be a problem."
-               " Is there another salt-master running?")
+    except Exception as exc:
+        if exc.args:
+            msg = ('Unable to bind socket, error: {0}'.format(str(exc)))
+        else:
+            msg = ('Unable to bind socket, this might not be a problem.'
+                   ' Is there another salt-master running?')
         if is_console_configured():
             log.warn(msg)
         else:
-            sys.stderr.write("WARNING: {0}\n".format(msg))
+            sys.stderr.write('WARNING: {0}\n'.format(msg))
         result = False
     finally:
         pubsock.close()
@@ -117,16 +146,12 @@ def verify_files(files, user):
     '''
     Verify that the named files exist and are owned by the named user
     '''
-    if 'os' in os.environ:
-        if os.environ['os'].startswith('Windows'):
-            return True
+    if salt.utils.is_windows():
+        return True
     import pwd  # after confirming not running Windows
-    import grp
     try:
         pwnam = pwd.getpwnam(user)
         uid = pwnam[2]
-        gid = pwnam[3]
-        groups = [g.gr_gid for g in grp.getgrall() if user in g.gr_mem]
 
     except KeyError:
         err = ('Failed to prepare the Salt environment for user '
@@ -135,13 +160,19 @@ def verify_files(files, user):
         sys.exit(2)
     for fn_ in files:
         dirname = os.path.dirname(fn_)
-        if not os.path.isdir(dirname):
-            os.makedirs(dirname)
-        if not os.path.isfile(fn_):
-            with salt.utils.fopen(fn_, 'w+') as fp_:
-                fp_.write('')
+        try:
+            if not os.path.isdir(dirname):
+                os.makedirs(dirname)
+            if not os.path.isfile(fn_):
+                with salt.utils.fopen(fn_, 'w+') as fp_:
+                    fp_.write('')
+        except OSError as err:
+            msg = 'Failed to create path "{0}" - {1}\n'
+            sys.stderr.write(msg.format(fn_, err))
+            sys.exit(err.errno)
+
         stats = os.stat(fn_)
-        if not uid == stats.st_uid:
+        if uid != stats.st_uid:
             try:
                 os.chown(fn_, uid, -1)
             except OSError:
@@ -154,9 +185,8 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
     Verify that the named directories are in place and that the environment
     can shake the salt
     '''
-    if 'os' in os.environ:
-        if os.environ['os'].startswith('Windows'):
-            return True
+    if salt.utils.is_windows():
+        return True
     import pwd  # after confirming not running Windows
     import grp
     try:
@@ -190,7 +220,7 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
         # If starting the process as root, chown the new dirs
         if os.getuid() == 0:
             fmode = os.stat(dir_)
-            if not fmode.st_uid == uid or not fmode.st_gid == gid:
+            if fmode.st_uid != uid or fmode.st_gid != gid:
                 if permissive and fmode.st_gid in groups:
                     # Allow the directory to be owned by any group root
                     # belongs to if we say it's ok to be permissive
@@ -209,7 +239,7 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
                         fmode = os.stat(path)
                     except (IOError, OSError):
                         pass
-                    if not fmode.st_uid == uid or not fmode.st_gid == gid:
+                    if fmode.st_uid != uid or fmode.st_gid != gid:
                         if permissive and fmode.st_gid in groups:
                             pass
                         else:
@@ -218,7 +248,7 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
                 for name in dirs:
                     path = os.path.join(root, name)
                     fmode = os.stat(path)
-                    if not fmode.st_uid == uid or not fmode.st_gid == gid:
+                    if fmode.st_uid != uid or fmode.st_gid != gid:
                         if permissive and fmode.st_gid in groups:
                             pass
                         else:
@@ -235,7 +265,7 @@ def verify_env(dirs, user, permissive=False, pki_dir=''):
         # by the user running the master
         if dir_ == pki_dir:
             smode = stat.S_IMODE(mode.st_mode)
-            if not smode == 448 and not smode == 488:
+            if smode != 448 and smode != 488:
                 if os.access(dir_, os.W_OK):
                     os.chmod(dir_, 448)
                 else:
@@ -253,17 +283,23 @@ def check_user(user):
     '''
     Check user and assign process uid/gid.
     '''
-    if 'os' in os.environ:
-        if os.environ['os'].startswith('Windows'):
-            return True
+    if salt.utils.is_windows():
+        return True
     if user == getpass.getuser():
         return True
     import pwd  # after confirming not running Windows
+    import grp
     try:
         pwuser = pwd.getpwnam(user)
         try:
+            if hasattr(os, 'initgroups'):
+                os.initgroups(user, pwuser.pw_gid)
+            else:
+                os.setgroups([e.gr_gid for e in grp.getgrall()
+                              if user in e.gr_mem] + [pwuser.pw_gid])
             os.setgid(pwuser.pw_gid)
             os.setuid(pwuser.pw_uid)
+
         except OSError:
             msg = 'Salt configured to run as user "{0}" but unable to switch.'
             msg = msg.format(user)
@@ -283,7 +319,7 @@ def check_user(user):
 
 
 def list_path_traversal(path):
-    """
+    '''
     Returns a full list of directories leading up to, and including, a path.
 
     So list_path_traversal('/path/to/salt') would return:
@@ -293,7 +329,7 @@ def list_path_traversal(path):
     This routine has been tested on Windows systems as well.
     list_path_traversal('c:\\path\\to\\salt') on Windows would return:
         ['c:\\', 'c:\\path', 'c:\\path\\to', 'c:\\path\\to\\salt']
-    """
+    '''
     out = [path]
     (head, tail) = os.path.split(path)
     if tail == '':
@@ -317,22 +353,29 @@ def check_path_traversal(path, user='root'):
     for tpath in list_path_traversal(path):
         if not os.access(tpath, os.R_OK):
             msg = 'Could not access {0}.'.format(tpath)
-            current_user = getpass.getuser()
-            # Make the error message more intelligent based on how
-            # the user invokes salt-call or whatever other script.
-            if user != current_user:
-                msg += ' Try running as user {0}.'.format(user)
+            if not os.path.exists(tpath):
+                msg += ' Path does not exist.'
             else:
-                msg += ' Please give {0} read permissions.'.format(user, tpath)
+                current_user = getpass.getuser()
+                # Make the error message more intelligent based on how
+                # the user invokes salt-call or whatever other script.
+                if user != current_user:
+                    msg += ' Try running as user {0}.'.format(user)
+                else:
+                    msg += ' Please give {0} read permissions.'.format(user,
+                                                                       tpath)
             # Propagate this exception up so there isn't a sys.exit()
             # in the middle of code that could be imported elsewhere.
             raise SaltClientError(msg)
 
 
 def check_max_open_files(opts):
+    '''
+    Check the number of max allowed open files and adjust if needed
+    '''
     mof_c = opts.get('max_open_files', 100000)
     if sys.platform.startswith('win'):
-        # Check the windows api for more detail on this
+        # Check the Windows API for more detail on this
         # http://msdn.microsoft.com/en-us/library/xt874334(v=vs.71).aspx
         # and the python binding http://timgolden.me.uk/pywin32-docs/win32file.html
         mof_s = mof_h = win32file._getmaxstdio()
@@ -340,10 +383,7 @@ def check_max_open_files(opts):
         mof_s, mof_h = resource.getrlimit(resource.RLIMIT_NOFILE)
 
     accepted_keys_dir = os.path.join(opts.get('pki_dir'), 'minions')
-    accepted_count = len([
-        key for key in os.listdir(accepted_keys_dir) if
-        os.path.isfile(os.path.join(accepted_keys_dir, key))
-    ])
+    accepted_count = sum(1 for _ in os.listdir(accepted_keys_dir))
 
     log.debug(
         'This salt-master instance has accepted {0} minion keys.'.format(
@@ -388,3 +428,33 @@ def check_max_open_files(opts):
 
     msg += 'Please consider raising this value.'
     log.log(level=level, msg=msg)
+
+
+def clean_path(root, path, subdir=False):
+    '''
+    Accepts the root the path needs to be under and verifies that the path is
+    under said root. Pass in subdir=True if the path can result in a
+    subdirectory of the root instead of having to reside directly in the root
+    '''
+    if not os.path.isabs(root):
+        return ''
+    if not os.path.isabs(path):
+        path = os.path.join(root, path)
+    path = os.path.normpath(path)
+    if subdir:
+        if path.startswith(root):
+            return path
+    else:
+        if os.path.dirname(path) == os.path.normpath(root):
+            return path
+    return ''
+
+
+def valid_id(opts, id_):
+    '''
+    Returns if the passed id is valid
+    '''
+    try:
+        return bool(clean_path(opts['pki_dir'], id_))
+    except (AttributeError, KeyError) as e:
+        return False

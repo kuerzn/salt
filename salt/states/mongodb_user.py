@@ -1,7 +1,18 @@
+# -*- coding: utf-8 -*-
 '''
 Management of Mongodb users
 ===========================
 '''
+
+# Define the module's virtual name
+__virtualname__ = 'mongodb_user'
+
+
+def __virtual__():
+    if 'mongodb.user_exists' in __salt__:
+        return __virtualname__
+    return False
+
 
 def present(name,
             passwd,
@@ -39,8 +50,17 @@ def present(name,
            'changes': {},
            'result': True,
            'comment': 'User {0} is already present'.format(name)}
+
+    # Check for valid port
+    try:
+        port = int(port)
+    except TypeError:
+        ret['result'] = False
+        ret['comment'] = 'Port ({0}) is not an integer.'.format(port)
+        return ret
+
     # check if user exists
-    if __salt__['mongodb.user_exists'](name, user, password, host, port):
+    if __salt__['mongodb.user_exists'](name, user, password, host, port, database):
         return ret
 
     if __opts__['test']:

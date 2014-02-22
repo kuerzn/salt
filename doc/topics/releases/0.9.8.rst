@@ -2,13 +2,15 @@
 Salt 0.9.8 Release Notes
 ========================
 
+:release: 2012-03-21
+
 Salt 0.9.8 is a big step forward, with many additions and enhancements, as
 well as a number of precursors to advanced future developments.
 
 This version of Salt adds much more power to the command line, making the
 old hard timeout issues a thing of the past and adds keyword argument
-support. These additions are also available in the salt client api, making
-the available api tools much more powerful.
+support. These additions are also available in the salt client API, making
+the available API tools much more powerful.
 
 The new pillar system allows for data to be stored on the master and
 assigned to minions in a granular way similar to the state system. It also
@@ -32,7 +34,7 @@ default behavior of grain matching has changed slightly to reflect the rest
 of salt and the compound matcher system has been refined.
 
 A number of impressive features with keyword arguments have been added to both
-the cli and to the state system. This makes states much more powerful and
+the CLI and to the state system. This makes states much more powerful and
 flexible while maintaining the simple configuration everyone loves.
 
 The new batch size capability allows for executions to be rolled through a
@@ -79,7 +81,7 @@ And on any Syndics:
 
     # apt-get install salt-syndic
 
-The official salt stack ppa for Ubuntu is located at:
+The official Salt PPA for Ubuntu is located at:
 https://launchpad.net/~saltstack/+archive/salt
 
 
@@ -123,7 +125,7 @@ has just become portable, allowing minions to have a local copy of states
 or to manage states without a master entirely.
 
 This is accomplished via the new file client interface in Salt that allows
-for the ``salt://`` uri to be redirected to custom interfaces. This means that
+for the ``salt://`` URI to be redirected to custom interfaces. This means that
 there are now two interfaces for the salt file server, calling the master
 or looking in a local, minion defined ``file_roots``.
 
@@ -266,7 +268,6 @@ Default providers can also be defined in the minion config file:
 .. code-block:: yaml
 
     providers:
-      pkg: yumpkg5
       service: systemd
 
 When default providers are passed in the minion config, then those providers
@@ -302,7 +303,7 @@ take a percentage or a finite number:
 
 .. code-block:: bash
 
-    salt \* -b 10 test.ping
+    salt '*' -b 10 test.ping
 
     salt -G 'os:RedHat' --batch-size 25% apache.signal restart
 
@@ -331,18 +332,17 @@ with the :doc:`associated </ref/states/all/salt.states.rvm>`
 
 The :doc:`virt </ref/modules/all/salt.modules.virt>` module gained basic Xen support.
 
-The :doc:`yum </ref/modules/all/salt.modules.yumpkg5>`
-:doc:`pkg </ref/modules/all/salt.modules.yumpkg>` modules gained Scientific
-Linux support.
+The :doc:`yum </ref/modules/all/salt.modules.yumpkg>` module gained
+Scientific Linux support.
 
-The :doc:`pkg </ref/modules/all/salt.modules.apt>` module on Debian, Ubuntu,
+The :doc:`pkg </ref/modules/all/salt.modules.aptpkg>` module on Debian, Ubuntu,
 and derivatives force apt to run in a non-interactive mode. This prevents
 issues when package installation waits for confirmation.
 
 A :doc:`pkg </ref/modules/all/salt.modules.zypper>` module for OpenSUSE's
 zypper was added.
 
-The :doc:`service </ref/modules/all/salt.modules.upstart>` module on ubuntu
+The :doc:`service </ref/modules/all/salt.modules.upstart>` module on Ubuntu
 natively supports upstart.
 
 A new :doc:`debconf </ref/modules/all/salt.modules.debconfmod>` module was
@@ -394,4 +394,4 @@ Windows Support
 Salt states on windows are now much more viable thanks to contributions from
 our community! States for file, service, local user, and local group management are more fully
 fleshed out along with network and disk modules. Windows users can also now manage
-registry entries using the new "reg" module. 
+registry entries using the new "reg" module.

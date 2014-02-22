@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 The cp module is used to execute the logic used by the salt-cp command
 line application, salt-cp is NOT intended to broadcast large files, it is
@@ -6,6 +7,7 @@ Salt-cp can be used to distribute configuration files
 '''
 
 # Import python libs
+from __future__ import print_function
 import os
 import sys
 import pprint

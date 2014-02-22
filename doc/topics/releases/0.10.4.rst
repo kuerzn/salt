@@ -2,6 +2,8 @@
 Salt 0.10.4 Release Notes
 =========================
 
+:release: 2012-10-23
+
 Salt 0.10.4 is a monumental release for the Salt team, with two new module
 systems, many additions to allow granular access to Salt, improved platform
 support and much more.
@@ -47,7 +49,7 @@ Access Control System
 All Salt systems can now be configured to grant access to non-administrative
 users in a granular way. The old configuration continues to work. Specific
 functions can be opened up to specific minions from specific users in the case
-of external auth and client acls, and for specific minions in the case of the
+of external auth and client ACLs, and for specific minions in the case of the
 peer system.
 
 Access controls are configured like this:

@@ -1,29 +1,29 @@
 # -*- coding: utf-8 -*-
 '''
+    :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
+    :copyright: © 2012-2013 by the SaltStack Team, see AUTHORS for more details
+    :license: Apache 2.0, see LICENSE for more details.
+
+
     tests.integration.shell.call
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-    :codeauthor: :email:`Pedro Algarvio (pedro@algarvio.me)`
-    :copyright: © 2012 by the SaltStack Team, see AUTHORS for more details.
-    :license: Apache 2.0, see LICENSE for more details.
 '''
 
 # Import python libs
 import os
 import sys
+import re
+import shutil
 import yaml
 from datetime import datetime
 
-# Import salt libs
-from salt import version
+# Import Salt Testing libs
+from salttesting import skipIf
+from salttesting.helpers import ensure_in_syspath
+ensure_in_syspath('../../')
 
-# Import salt test libs
+# Import salt libs
 import integration
-from saltunittest import (
-    TestLoader,
-    TextTestRunner,
-    skipIf,
-)
 
 
 class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
@@ -34,10 +34,11 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         out = self.run_call('-l quiet test.fib 3')
 
         expect = ['local:',
-                  '    - 0',
-                  '    - 1',
-                  '    - 1',
-                  '    - 2']
+                  '    |_',
+                  '      - 0',
+                  '      - 1',
+                  '      - 1',
+                  '      - 2']
         self.assertEqual(expect, out[:-1])
 
     def test_text_output(self):
@@ -56,6 +57,79 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             'salt \'*\' user.delete name remove=True force=True',
             ''.join(ret)
         )
+
+    def test_issue_6973_state_highstate_exit_code(self):
+        '''
+        If there is no tops/master_tops or state file matches
+        for this minion, salt-call should exit non-zero if invoked with
+        option --retcode-passthrough
+        '''
+        src = os.path.join(integration.FILES, 'file/base/top.sls')
+        dst = os.path.join(integration.FILES, 'file/base/top.sls.bak')
+        shutil.move(src, dst)
+        expected_comment = 'No Top file or external nodes data matches found'
+        try:
+            stdout, retcode = self.run_call(
+                '-l quiet --retcode-passthrough state.highstate',
+                with_retcode=True
+            )
+        finally:
+            shutil.move(dst, src)
+        self.assertIn(expected_comment, ''.join(stdout))
+        self.assertNotEqual(0, retcode)
+
+    @skipIf(sys.platform.startswith('win'), 'This test does not apply on Win')
+    def test_return(self):
+        config_dir = '/tmp/salttest'
+        minion_config_file = os.path.join(config_dir, 'minion')
+        minion_config = {
+            'id': 'minion_test_issue_2731',
+            'master': 'localhost',
+            'master_port': 64506,
+            'root_dir': '/tmp/salttest',
+            'pki_dir': 'pki',
+            'cachedir': 'cachedir',
+            'sock_dir': 'minion_sock',
+            'open_mode': True,
+            'log_file': '/tmp/salttest/minion_test_issue_2731',
+            'log_level': 'quiet',
+            'log_level_logfile': 'info'
+        }
+
+        # Remove existing logfile
+        if os.path.isfile('/tmp/salttest/minion_test_issue_2731'):
+            os.unlink('/tmp/salttest/minion_test_issue_2731')
+
+        # Let's first test with a master running
+        open(minion_config_file, 'w').write(
+            yaml.dump(minion_config, default_flow_style=False)
+        )
+        out = self.run_call('-c {0} cmd.run "echo returnTOmaster"'.format(
+            os.path.join(integration.INTEGRATION_TEST_DIR, 'files', 'conf')))
+        jobs = [a for a in self.run_run('-c {0} jobs.list_jobs'.format(
+            os.path.join(integration.INTEGRATION_TEST_DIR, 'files', 'conf')))]
+
+        self.assertTrue(True in ['returnTOmaster' in j for j in jobs])
+        # lookback jid
+        first_match = [(i, j)
+                       for i, j in enumerate(jobs)
+                       if 'returnTOmaster' in j][0]
+        jid, idx = None, first_match[0]
+        while idx > 0:
+            jid = re.match("('|\")([0-9]+)('|\"):", jobs[idx])
+            if jid:
+                jid = jid.group(2)
+                break
+            idx -= 1
+        assert idx > 0
+        assert jid
+        master_out = [
+            a for a in self.run_run('-c {0} jobs.lookup_jid {1}'.format(
+                os.path.join(integration.INTEGRATION_TEST_DIR,
+                             'files',
+                             'conf'),
+                jid))]
+        self.assertTrue(True in ['returnTOmaster' in a for a in master_out])
 
     @skipIf(sys.platform.startswith('win'), 'This test does not apply on Win')
     def test_issue_2731_masterless(self):
@@ -180,11 +254,45 @@ class CallTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             if os.path.isfile(this_minion_key):
                 os.unlink(this_minion_key)
 
+    def test_issue_7754(self):
+        old_cwd = os.getcwd()
+        config_dir = os.path.join(integration.TMP, 'issue-7754')
+        if not os.path.isdir(config_dir):
+            os.makedirs(config_dir)
 
-if __name__ == "__main__":
-    loader = TestLoader()
-    tests = loader.loadTestsFromTestCase(CallTest)
-    print('Setting up Salt daemons to execute tests')
-    with integration.TestDaemon():
-        runner = TextTestRunner(verbosity=1).run(tests)
-        sys.exit(runner.wasSuccessful())
+        os.chdir(config_dir)
+
+        minion_config = yaml.load(
+            open(self.get_config_file_path('minion'), 'r').read()
+        )
+        minion_config['log_file'] = 'file:///dev/log/LOG_LOCAL3'
+        open(os.path.join(config_dir, 'minion'), 'w').write(
+            yaml.dump(minion_config, default_flow_style=False)
+        )
+        ret = self.run_script(
+            'salt-call',
+            '--config-dir {0} cmd.run "echo foo"'.format(
+                config_dir
+            ),
+            timeout=15,
+            catch_stderr=True,
+            with_retcode=True
+        )
+        try:
+            self.assertIn('local:', ret[0])
+            self.assertFalse(os.path.isdir(os.path.join(config_dir, 'file:')))
+        except AssertionError:
+            # We now fail when we're unable to properly set the syslog logger
+            self.assertIn(
+                'Failed to setup the Syslog logging handler', '\n'.join(ret[1])
+            )
+            self.assertEqual(ret[2], 2)
+        finally:
+            os.chdir(old_cwd)
+            if os.path.isdir(config_dir):
+                shutil.rmtree(config_dir)
+
+
+if __name__ == '__main__':
+    from integration import run_tests
+    run_tests(CallTest)

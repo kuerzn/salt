@@ -1,13 +1,17 @@
+# -*- coding: utf-8 -*-
 '''
 A salt interface to psutil, a system and process library.
 See http://code.google.com/p/psutil.
 
-:depends:   - psutil Python module
+:depends:   - psutil Python module, version 0.3.0 or later
+            - python-utmp package (optional)
 '''
 
 # Import python libs
-import sys
 import time
+
+# Import salt libs
+import salt.utils
 
 # Import third party libs
 try:
@@ -16,17 +20,24 @@ try:
 except ImportError:
     HAS_PSUTIL = False
 
+# Define the module's virtual name
+__virtualname__ = 'ps'
+
 
 def __virtual__():
     if not HAS_PSUTIL:
         return False
 
-    # The python 2.6 version of psutil lacks several functions
-    # used in this salt module so instead of spaghetti  string
-    # code to try to bring sanity to everything, disable it.
-    if sys.version_info[0] == 2 and sys.version_info[1] < 7:
-        return False
-    return "ps"
+    # Functions and attributes used in this execution module seem to have been
+    # added as of psutil 0.3.0, from an inspection of the source code. Only
+    # make this module available if the version of psutil is >= 0.3.0. Note
+    # that this may need to be tweaked if we find post-0.3.0 versions which
+    # also have problems running the functions in this execution module, but
+    # most distributions have already moved to later versions (for example,
+    # as of Dec. 2013 EPEL is on 0.6.1, Debian 7 is on 0.5.1, etc.).
+    if psutil.version_info >= (0, 3, 0):
+        return __virtualname__
+    return False
 
 
 def top(num_processes=5, interval=3):
@@ -35,7 +46,9 @@ def top(num_processes=5, interval=3):
     num_processes = return the top N CPU consuming processes
     interval = the number of seconds to sample CPU usage over
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt '*' ps.top
 
@@ -44,13 +57,19 @@ def top(num_processes=5, interval=3):
     result = []
     start_usage = {}
     for pid in psutil.get_pid_list():
-        process = psutil.Process(pid)
-        user, system = process.get_cpu_times()
+        try:
+            process = psutil.Process(pid)
+            user, system = process.get_cpu_times()
+        except psutil.NoSuchProcess:
+            continue
         start_usage[process] = user + system
     time.sleep(interval)
     usage = set()
     for process, start in start_usage.items():
-        user, system = process.get_cpu_times()
+        try:
+            user, system = process.get_cpu_times()
+        except psutil.NoSuchProcess:
+            continue
         now = user + system
         diff = now - start
         usage.add((diff, process))
@@ -63,12 +82,17 @@ def top(num_processes=5, interval=3):
         else:
             cmdline = process.cmdline
         info = {'cmd': cmdline,
+                'user': process.username,
+                'status': process.status,
                 'pid': process.pid,
-                'create_time': process.create_time}
+                'create_time': process.create_time,
+                'cpu': {},
+                'mem': {},
+                }
         for key, value in process.get_cpu_times()._asdict().items():
-            info['cpu.{0}'.format(key)] = value
+            info['cpu'][key] = value
         for key, value in process.get_memory_info()._asdict().items():
-            info['mem.{0}'.format(key)] = value
+            info['mem'][key] = value
         result.append(info)
 
     return result
@@ -78,11 +102,144 @@ def get_pid_list():
     '''
     Return a list of process ids (PIDs) for all running processes.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.get_pid_list
     '''
     return psutil.get_pid_list()
+
+
+def kill_pid(pid, signal=15):
+    '''
+    Kill a process by PID.
+
+    .. code-block:: bash
+
+        salt 'minion' ps.kill_pid pid [signal=signal_number]
+
+    pid
+        PID of process to kill.
+
+    signal
+        Signal to send to the process. See manpage entry for kill
+        for possible values. Default: 15 (SIGTERM).
+
+    **Example:**
+
+    Send SIGKILL to process with PID 2000:
+
+    .. code-block:: bash
+
+        salt 'minion' ps.kill_pid 2000 signal=9
+    '''
+    try:
+        psutil.Process(pid).send_signal(signal)
+        return True
+    except psutil.NoSuchProcess:
+        return False
+
+
+def pkill(pattern, user=None, signal=15, full=False):
+    '''
+    Kill processes matching a pattern.
+
+    .. code-block:: bash
+
+        salt '*' ps.pkill pattern [user=username] [signal=signal_number] \\
+                [full=(true|false)]
+
+    pattern
+        Pattern to search for in the process list.
+
+    user
+        Limit matches to the given username. Default: All users.
+
+    signal
+        Signal to send to the process(es). See manpage entry for kill
+        for possible values. Default: 15 (SIGTERM).
+
+    full
+        A boolean value indicating whether only the name of the command or
+        the full command line should be matched against the pattern.
+
+    **Examples:**
+
+    Send SIGHUP to all httpd processes on all 'www' minions:
+
+    .. code-block:: bash
+
+        salt 'www.*' ps.pkill httpd signal=1
+
+    Send SIGKILL to all bash processes owned by user 'tom':
+
+    .. code-block:: bash
+
+        salt '*' ps.pkill bash signal=9 user=tom
+    '''
+
+    killed = []
+    for proc in psutil.process_iter():
+        name_match = pattern in ' '.join(proc.cmdline) if full \
+            else pattern in proc.name
+        user_match = True if user is None else user == proc.username
+        if name_match and user_match:
+            try:
+                proc.send_signal(signal)
+                killed.append(proc.pid)
+            except psutil.NoSuchProcess:
+                pass
+    if not killed:
+        return None
+    else:
+        return {'killed': killed}
+
+
+def pgrep(pattern, user=None, full=False):
+    '''
+    Return the pids for processes matching a pattern.
+
+    If full is true, the full command line is searched for a match,
+    otherwise only the name of the command is searched.
+
+    .. code-block:: bash
+
+        salt '*' ps.pgrep pattern [user=username] [full=(true|false)]
+
+    pattern
+        Pattern to search for in the process list.
+
+    user
+        Limit matches to the given username. Default: All users.
+
+    full
+        A boolean value indicating whether only the name of the command or
+        the full command line should be matched against the pattern.
+
+    **Examples:**
+
+    Find all httpd processes on all 'www' minions:
+
+    .. code-block:: bash
+
+        salt 'www.*' ps.pgrep httpd
+
+    Find all bash processes owned by user 'tom':
+
+    .. code-block:: bash
+
+        salt '*' ps.pgrep bash user=tom
+    '''
+
+    procs = []
+    for proc in psutil.process_iter():
+        name_match = pattern in ' '.join(proc.cmdline) if full \
+            else pattern in proc.name
+        user_match = True if user is None else user == proc.username
+        if name_match and user_match:
+            procs.append(proc.pid)
+    return procs or None
 
 
 def cpu_percent(interval=0.1, per_cpu=False):
@@ -95,14 +252,14 @@ def cpu_percent(interval=0.1, per_cpu=False):
         if True return an array of CPU percent busy for each CPU, otherwise
         aggregate all percents into one number
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.cpu_percent
     '''
     if per_cpu:
-        result = []
-        for cpu_percent in psutil.cpu_percent(interval, True):
-            result.append(cpu_percent)
+        result = list(psutil.cpu_percent(interval, True))
     else:
         result = psutil.cpu_percent(interval)
     return result
@@ -117,61 +274,135 @@ def cpu_times(per_cpu=False):
         if True return an array of percents for each CPU, otherwise aggregate
         all percents into one number
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.cpu_times
     '''
     if per_cpu:
-        result = []
-        for cpu_times in psutil.cpu_times(True):
-            result.append(dict(cpu_times._asdict()))
+        result = [dict(times._asdict()) for times in psutil.cpu_times(True)]
     else:
         result = dict(psutil.cpu_times(per_cpu)._asdict())
     return result
 
 
+def virtual_memory():
+    '''
+    .. versionadded:: Helium
+
+    Return a dict that describes statistics about system memory usage.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.virtual_memory
+    '''
+    return dict(psutil.virtual_memory()._asdict())
+
+
+def swap_memory():
+    '''
+    .. versionadded:: Helium
+
+    Return a dict that describes swap memory statistics.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.swap_memory
+    '''
+    return dict(psutil.swap_memory()._asdict())
+
+
 def physical_memory_usage():
     '''
+    .. deprecated:: Helium
+        Use :mod:`ps.virtual_memory <salt.modules.ps.virtual_memory>` instead.
+
     Return a dict that describes free and available physical memory.
 
-    CLI Examples::
+    CLI Examples:
+
+    .. code-block:: bash
 
         salt '*' ps.physical_memory_usage
     '''
+    salt.utils.warn_until(
+        'Helium',
+        '\'ps.physical_memory_usage\' is deprecated.  Please use'
+        '\'ps.virtual_memory\' instead.  This functionality will'
+        'be removed in Salt {version}.'
+    )
     return dict(psutil.phymem_usage()._asdict())
 
 
 def virtual_memory_usage():
     '''
+    .. deprecated:: Helium
+        Use :mod:`ps.virtual_memory <salt.modules.ps.virtual_memory>` instead.
+
     Return a dict that describes free and available memory, both physical
     and virtual.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.virtual_memory_usage
     '''
+    salt.utils.warn_until(
+        'Helium',
+        '\'ps.virtual_memory_usage\' is deprecated.  Please use'
+        '\'ps.virtual_memory\' instead.  This functionality will'
+        'be removed in Salt {version}.'
+    )
     return dict(psutil.virtmem_usage()._asdict())
 
 
 def cached_physical_memory():
     '''
+    .. deprecated:: Helium
+        Use :mod:`ps.virtual_memory <salt.modules.ps.virtual_memory>` instead.
+
     Return the amount cached memory.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.cached_physical_memory
     '''
+    salt.utils.warn_until(
+        'Helium',
+        '\'ps.cached_physical_memory\' is deprecated.  Please use'
+        '\'ps.virtual_memory\' instead.  This functionality will'
+        'be removed in Salt {version}.'
+    )
     return psutil.cached_phymem()
 
 
 def physical_memory_buffers():
     '''
+    .. deprecated:: Helium
+        Use :mod:`ps.virtual_memory <salt.modules.ps.virtual_memory>` instead.
+
     Return the amount of physical memory buffers.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.physical_memory_buffers
     '''
+    salt.utils.warn_until(
+        'Helium',
+        '\'ps.physical_memory_buffers\' is deprecated.  Please use'
+        '\'ps.virtual_memory\' instead.  This functionality will'
+        'be removed in Salt {version}.'
+    )
     return psutil.phymem_buffers()
 
 
@@ -184,13 +415,14 @@ def disk_partitions(all=False):
         if set to False, only return local, physical partitions (hard disk,
         USB, CD/DVD partitions).  If True, return all filesystems.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.disk_partitions
     '''
-    result = []
-    for partition in psutil.disk_partitions(all):
-        result.append(dict(partition._asdict()))
+    result = [dict(partition._asdict()) for partition in
+              psutil.disk_partitions(all)]
     return result
 
 
@@ -199,7 +431,9 @@ def disk_usage(path):
     Given a path, return a dict listing the total available space as well as
     the free space, and used space.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.disk_usage /home
     '''
@@ -211,7 +445,9 @@ def disk_partition_usage(all=False):
     Return a list of disk partitions plus the mount point, filesystem and usage
     statistics.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.disk_partition_usage
     '''
@@ -225,7 +461,9 @@ def total_physical_memory():
     '''
     Return the total number of bytes of physical memory.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.total_physical_memory
     '''
@@ -236,7 +474,9 @@ def num_cpus():
     '''
     Return the number of CPUs.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.num_cpus
     '''
@@ -247,18 +487,22 @@ def boot_time():
     '''
     Return the boot time in number of seconds since the epoch began.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.boot_time
     '''
-    return psutil.BOOT_TIME
+    return psutil.get_boot_time()
 
 
 def network_io_counters():
     '''
     Return network I/O statisitics.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.network_io_counters
     '''
@@ -269,8 +513,57 @@ def disk_io_counters():
     '''
     Return disk I/O statisitics.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' ps.disk_io_counters
     '''
     return dict(psutil.disk_io_counters()._asdict())
+
+
+def get_users():
+    '''
+    Return logged-in users.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' ps.get_users
+    '''
+    try:
+        recs = psutil.get_users()
+        return [dict(x._asdict()) for x in recs]
+    except AttributeError:
+        # get_users is only present in psutil > v0.5.0
+        # try utmp
+        try:
+            import utmp
+            result = []
+            while True:
+                rec = utmp.utmpaccess.getutent()
+                if rec is None:
+                    return result
+                elif rec[0] == 7:
+                    started = rec[8]
+                    if isinstance(started, tuple):
+                        started = started[0]
+                    result.append({'name': rec[4], 'terminal': rec[2],
+                                   'started': started, 'host': rec[5]})
+        except ImportError:
+            return False
+# This is a possible last ditch method
+#        result = []
+#        w = __salt__['cmd.run'](
+#            'who', env='{"LC_ALL": "en_US.UTF-8"}').splitlines()
+#        for u in w:
+#            u = u.split()
+#            started = __salt__['cmd.run'](
+#                'date --d "{0} {1}" +%s'.format(u[2], u[3])).strip()
+#            rec = {'name': u[0], 'terminal': u[1],
+#                   'started': started, 'host': None}
+#            if len(u) > 4:
+#                rec['host'] = u[4][1:-1]
+#            result.append(rec)
+#        return result

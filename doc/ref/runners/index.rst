@@ -2,26 +2,25 @@
 Salt Runners
 ============
 
-.. seealso:: :ref:`The full list of runners <all-salt.runners>`
-
 Salt runners are convenience applications executed with the salt-run command.
 
-A Salt runner can be a simple client call, or a complex application.
+Salt runners work similarly to Salt execution modules however they execute on the
+Salt master itself instead of remote Salt minions.
 
-The use for a Salt runner is to build a frontend hook for running sets of
-commands via Salt or creating special formatted output.
+A Salt runner can be a simple client call or a complex application.
+
+.. seealso:: :ref:`The full list of runners <all-salt.runners>`
 
 Writing Salt Runners
 --------------------
 
-Salt runners can be easily written, the work in a similar way to Salt modules
-except they run on the server side.
+A Salt runner is written in a similar manner to a Salt execution module.
+Both are Python modules which contain functions and each public function
+is a runner which may be executed via the *salt-run* command.
 
-A runner is a Python module that contains functions, each public function is
-a runner that can be executed via the *salt-run* command.
-
-If a Python module named test.py is created in the runners directory and
-contains a function called ``foo`` then the function could be called with:
+For example, if a Python module named ``test.py`` is created in the runners
+directory and contains a function called ``foo``, the ``test`` runner could be
+invoked with the following command:
 
 .. code-block:: bash
 
@@ -30,12 +29,12 @@ contains a function called ``foo`` then the function could be called with:
 Examples
 --------
 
-The best examples of runners can be found in the Salt source:
+Examples of runners can be found in the Salt distribution:
 
 :blob:`salt/runners`
 
 A simple runner that returns a well-formatted list of the minions that are
-responding to Salt calls would look like this:
+responding to Salt calls could look like this:
 
 .. code-block:: python
 
@@ -46,7 +45,7 @@ responding to Salt calls would look like this:
         '''
         Print a list of all of the minions that are up
         '''
-        client = salt.client.LocalClient(__opts__['config'])
+        client = salt.client.LocalClient(__opts__['conf_file'])
         minions = client.cmd('*', 'test.ping', timeout=1)
         for minion in sorted(minions):
             print minion

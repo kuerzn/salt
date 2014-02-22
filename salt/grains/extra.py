@@ -1,8 +1,15 @@
+# -*- coding: utf-8 -*-
 # Import python libs
 import os
 
 # Import third party libs
 import yaml
+import logging
+
+# Import salt libs
+import salt.utils
+
+log = logging.getLogger(__name__)
 
 
 def shell():
@@ -12,6 +19,7 @@ def shell():
     # Provides:
     #   shell
     return {'shell': os.environ.get('SHELL', '/bin/sh')}
+
 
 def config():
     '''
@@ -30,9 +38,10 @@ def config():
                 'grains'
                 )
     if os.path.isfile(gfn):
-        with open(gfn, 'rb') as fp_:
+        with salt.utils.fopen(gfn, 'rb') as fp_:
             try:
                 return yaml.safe_load(fp_.read())
             except Exception:
+                log.warn("Bad syntax in grains file! Skipping.")
                 return {}
     return {}

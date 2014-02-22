@@ -9,7 +9,6 @@ Full list of builtin execution modules
     .. toctree::
 
         salt.modules.pkg
-        salt.modules.sys
 
 .. currentmodule:: salt.modules
 
@@ -20,102 +19,165 @@ Full list of builtin execution modules
     aliases
     alternatives
     apache
-    apt
+    aptpkg
     archive
     at
     augeas_cfg
+    aws_sqs
+    blockdev
     bluez
     brew
-    butterkvm
+    bridge
+    bsd_shadow
     cassandra
-    cluster
+    chocolatey
+    cloud
     cmdmod
+    composer
     config
     cp
     cron
     daemontools
+    darwin_sysctl
     data
+    ddns
+    deb_apache
     debconfmod
+    debian_ip
     debian_service
+    defaults
+    dig
     disk
     djangomod
+    dnsmasq
+    dnsutil
+    dockerio
+    dpkg
     ebuild
     eix
+    environ
+    eselect
     event
     extfs
     file
+    freebsd_sysctl
     freebsdjail
     freebsdkmod
     freebsdpkg
+    freebsdports
     freebsdservice
-    freebsd_sysctl
     gem
-    gentoolkitmod
     gentoo_service
+    gentoolkitmod
     git
     glance
+    glusterfs
+    gnomedesktop
     grains
     groupadd
     grub_legacy
+    guestfs
+    hadoop
     hg
     hosts
+    htpasswd
+    img
+    incron
+    ini_manage
     iptables
+    junos
+    key
     keyboard
     keystone
     kmod
-    kvm_hyper
     launchctl
     layman
     ldapmod
     linux_acl
     linux_lvm
     linux_sysctl
-    locale
+    localemod
+    locate
+    logrotate
+    lvs
+    lxc
+    mac_group
+    mac_user
     makeconf
+    match
     mdadm
+    memcached
+    mine
+    modjk
     mongodb
     monit
     moosefs
     mount
+    munin
     mysql
+    netbsd_sysctl
+    netbsdservice
     network
+    nfs3
     nginx
     nova
-    nzbget
+    npm
+    omapi
     openbsdpkg
     openbsdservice
+    openstack_config
     osxdesktop
     pacman
+    pagerduty
     pam
     parted
     pecl
     pillar
     pip
-    pkgng
     pkg_resource
+    pkgin
+    pkgng
     pkgutil
+    portage_config
     postgres
     poudriere
+    powerpath
     ps
     publish
     puppet
     pw_group
     pw_user
+    qemu_img
+    qemu_nbd
+    quota
     rabbitmq
+    rbenv
+    rdp
     reg
+    rest_package
+    rest_sample
+    rest_service
     ret
     rh_ip
     rh_service
+    riak
+    rpm
+    rsync
     rvm
+    s3
+    saltcloudmod
     saltutil
+    seed
     selinux
     service
     shadow
+    smartos_imgadm
+    smartos_vmadm
     smf
     solaris_group
-    solarispkg
     solaris_shadow
     solaris_user
+    solarispkg
     solr
     sqlite3
     ssh
@@ -125,6 +187,7 @@ Full list of builtin execution modules
     svn
     sysbench
     sysmod
+    system
     systemd
     test
     timezone
@@ -132,18 +195,32 @@ Full list of builtin execution modules
     tomcat
     upstart
     useradd
+    uwsgi
     virt
-    virtualenv
+    virtualenv_mod
+    win_autoruns
     win_disk
+    win_dns_client
     win_file
+    win_firewall
     win_groupadd
+    win_ip
     win_network
+    win_ntp
+    win_path
     win_pkg
+    win_repo
+    win_servermanager
     win_service
     win_shadow
     win_status
+    win_system
+    win_timezone
     win_useradd
-    yumpkg5
+    xapi
+    xmpp
     yumpkg
+    zcbuildout
+    zfs
     zpool
     zypper

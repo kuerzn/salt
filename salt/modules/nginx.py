@@ -1,17 +1,20 @@
+# -*- coding: utf-8 -*-
 '''
 Support for nginx
 '''
-
+import urllib2
 # Import salt libs
 import salt.utils
+import salt.utils.decorators as decorators
 
 
 # Cache the output of running which('nginx') so this module
 # doesn't needlessly walk $PATH looking for the same binary
 # for nginx over and over and over for each function herein
-@salt.utils.memoize
+@decorators.memoize
 def __detect_os():
     return salt.utils.which('nginx')
+
 
 def __virtual__():
     '''
@@ -21,11 +24,14 @@ def __virtual__():
         return 'nginx'
     return False
 
+
 def version():
     '''
     Return server version from nginx -v
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' nginx.version
     '''
@@ -34,24 +40,44 @@ def version():
     ret = out[0].split(': ')
     return ret[-1]
 
+
+def configtest():
+    '''
+    test configuration and exit
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' nginx.configtest
+    '''
+
+    cmd = '{0} -t'.format(__detect_os())
+    out = __salt__['cmd.run'](cmd).splitlines()
+    ret = out[0].split(': ')
+    return ret[-1]
+
+
 def signal(signal=None):
     '''
-    Signals nginx to start, restart, or stop.
+    Signals nginx to start, reload, reopen or stop.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' nginx.signal reload
     '''
-    valid_signals = ('reopen', 'stop', 'quit', 'reload')
+    valid_signals = ('start', 'reopen', 'stop', 'quit', 'reload')
 
     if signal not in valid_signals:
         return
 
     # Make sure you use the right arguments
-    if signal in valid_signals:
-        arguments = ' -s {0}'.format(signal)
+    if signal == "start":
+        arguments = ''
     else:
-        arguments = ' {0}'.format(signal)
+        arguments = ' -s {0}'.format(signal)
     cmd = __detect_os() + arguments
     out = __salt__['cmd.run_all'](cmd)
 
@@ -67,3 +93,42 @@ def signal(signal=None):
     else:
         ret = 'Command: "{0}" completed successfully!'.format(cmd)
     return ret
+
+
+def status(url="http://127.0.0.1/status"):
+    """
+    Return the data from an Nginx status page as a dictionary.
+    http://wiki.nginx.org/HttpStubStatusModule
+
+    url
+        The URL of the status page. Defaults to 'http://127.0.0.1/status'
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' nginx.status
+    """
+    resp = urllib2.urlopen(url)
+    status_data = resp.read()
+    resp.close()
+
+    lines = status_data.splitlines()
+    if not len(lines) == 4:
+        return
+    # "Active connections: 1 "
+    active_connections = lines[0].split()[2]
+    # "server accepts handled requests"
+    # "  12 12 9 "
+    accepted, handled, requests = lines[2].split()
+    # "Reading: 0 Writing: 1 Waiting: 0 "
+    _, reading, _, writing, _, waiting = lines[3].split()
+    return {
+        'active connections': int(active_connections),
+        'accepted': int(accepted),
+        'handled': int(handled),
+        'requests': int(requests),
+        'reading': int(reading),
+        'writing': int(writing),
+        'waiting': int(waiting),
+    }

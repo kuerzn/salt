@@ -1,9 +1,19 @@
+# -*- coding: utf-8 -*-
+
 '''
 Tests for the Git state
 '''
+
+# Import python libs
 import os
 import shutil
 import socket
+
+# Import Salt Testing libs
+from salttesting.helpers import ensure_in_syspath
+ensure_in_syspath('../../')
+
+# Import salt libs
 import integration
 
 
@@ -74,6 +84,49 @@ class GitTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
                 rev='develop',
                 target=name,
                 submodules=True
+            )
+            self.assertSaltTrueReturn(ret)
+            self.assertTrue(os.path.isdir(os.path.join(name, '.git')))
+        finally:
+            shutil.rmtree(name, ignore_errors=True)
+
+    def test_latest_unless_no_cwd_issue_6800(self):
+        '''
+        cwd=target was being passed to _run_check which blew up if
+        target dir did not already exist.
+        '''
+        name = os.path.join(integration.TMP, 'salt_repo')
+        if os.path.isdir(name):
+            shutil.rmtree(name)
+        try:
+            ret = self.run_state(
+                'git.latest',
+                name='https://{0}/saltstack/salt-bootstrap.git'.format(self.__domain),
+                rev='develop',
+                target=name,
+                unless='test -e {0}'.format(name),
+                submodules=True
+            )
+            self.assertSaltTrueReturn(ret)
+            self.assertTrue(os.path.isdir(os.path.join(name, '.git')))
+        finally:
+            shutil.rmtree(name, ignore_errors=True)
+
+    def test_numeric_rev(self):
+        '''
+        git.latest with numeric revision
+        '''
+        # We should actually clone a smaller repository, salt's repo is getting
+        # pretty big
+        name = os.path.join(integration.TMP, 'salt_repo')
+        try:
+            ret = self.run_state(
+                'git.latest',
+                name='https://{0}/saltstack/salt.git'.format(self.__domain),
+                rev=0.11,
+                target=name,
+                submodules=True,
+                timeout=120
             )
             self.assertSaltTrueReturn(ret)
             self.assertTrue(os.path.isdir(os.path.join(name, '.git')))

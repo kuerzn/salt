@@ -1,33 +1,45 @@
 ======================
-Full Table of Contents
+Salt Table of Contents
 ======================
 
 .. toctree::
     :maxdepth: 3
     :glob:
 
+    faq
+    glossary
+
+    topics/cloud/index
+    topics/community
+    topics/configuration
+    topics/conventions/*
+    topics/development/*
+    topics/eauth/*
+    topics/event/index
+    topics/git/*
+    topics/hacking
     topics/index
     topics/installation/index
-    topics/configuration
-    topics/hacking
-    topics/targeting/index
-    topics/tutorials/index
-    topics/eauth/*
-    topics/pillar/index
-    topics/master_tops/index
     topics/jobs/*
+    topics/master_tops/index
+    topics/mine/*
     topics/nonroot
-    topics/troubleshooting/index
-    topics/troubleshooting/yaml_idiosyncrasies
-    topics/community
+    topics/pillar/index
     topics/projects/index
-    topics/event/index
-    topics/tests/*
+    topics/proxyminion/*
     topics/reactor/*
-    topics/style
-    topics/git/*
-    topics/development/index
+    topics/salt_projects
+    topics/ssh/*
+    topics/targeting/index
+    topics/tests/*
+    topics/translating
+    topics/troubleshooting/*
+    topics/tutorials/index
+    topics/virt/*
+    topics/yaml/*
 
+    ref/configuration/logging/*
+    ref/configuration/logging/handlers/*
     ref/index
     ref/modules/*
     ref/modules/all/index
@@ -44,13 +56,15 @@ Full Table of Contents
     ref/runners/index
     ref/runners/all/index
     ref/wheel/all/index
+    ref/auth/all/index
     ref/output/all/index
+    ref/clouds/all/index
     ref/clients/index
     ref/peer
     ref/clientacl
     ref/syndic
-    ref/python-api
     ref/file_server/*
+    ref/file_server/all/index
     ref/configuration/*
     ref/internals/index
     ref/topology
@@ -64,6 +78,8 @@ Full Table of Contents
     ref/cli/salt-cp
     ref/cli/salt-call
     ref/cli/salt-run
+    ref/cli/salt-ssh
     ref/cli/salt-syndic
+    ref/cli/salt-cloud
 
     topics/releases/index

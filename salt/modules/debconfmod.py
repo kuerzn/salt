@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Support for Debconf
 '''
@@ -12,6 +13,13 @@ import salt.utils
 
 log = logging.getLogger(__name__)
 
+__func_alias__ = {
+    'set_': 'set'
+}
+
+# Define the module's virtual name
+__virtualname__ = 'debconf'
+
 
 def __virtual__():
     '''
@@ -24,7 +32,7 @@ def __virtual__():
     if salt.utils.which('debconf-get-selections') is None:
         return False
 
-    return 'debconf'
+    return __virtualname__
 
 
 def _unpack_lines(out):
@@ -32,9 +40,9 @@ def _unpack_lines(out):
     Unpack the debconf lines
     '''
     rexp = ('(?ms)'
-            '^(?P<package>[^#]\S+)[\t ]+'
-            '(?P<question>\S+)[\t ]+'
-            '(?P<type>\S+)[\t ]+'
+            '^(?P<package>[^#]\\S+)[\t ]+'
+            '(?P<question>\\S+)[\t ]+'
+            '(?P<type>\\S+)[\t ]+'
             '(?P<value>[^\n]*)$')
     lines = re.findall(rexp, out)
     return lines
@@ -46,7 +54,9 @@ def get_selections(fetchempty=True):
 
         {'package': [['question', 'type', 'value'], ...]}
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' debconf.get_selections
     '''
@@ -58,11 +68,11 @@ def get_selections(fetchempty=True):
     lines = _unpack_lines(out)
 
     for line in lines:
-        package, question, type, value = line
+        package, question, type_, value = line
         if fetchempty or value:
             (selections
                 .setdefault(package, [])
-                .append([question, type, value]))
+                .append([question, type_, value]))
 
     return selections
 
@@ -75,7 +85,9 @@ def show(name):
 
     If debconf doesn't know about a package, we return None.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' debconf.show <package name>
     '''
@@ -94,11 +106,13 @@ def _set_file(path):
     __salt__['cmd.run_stdout'](cmd)
 
 
-def set(package, question, type, value, *extra):
+def set_(package, question, type, value, *extra):
     '''
     Set answers to debconf questions for a package.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' debconf.set <package> <question> <type> <value> [<value> ...]
     '''
@@ -119,15 +133,25 @@ def set(package, question, type, value, *extra):
     return True
 
 
-def set_file(path):
+def set_file(path, saltenv='base', **kwargs):
     '''
     Set answers to debconf questions from a file.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt '*' debconf.set_file salt://pathto/pkg.selections
     '''
-    path = __salt__['cp.cache_file'](path)
+    if '__env__' in kwargs:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' not '
+            '\'__env__\'. This functionality will be removed in Salt Boron.'
+        )
+        # Backwards compatibility
+        saltenv = kwargs['__env__']
+    path = __salt__['cp.cache_file'](path, saltenv)
     if path:
         _set_file(path)
         return True
