@@ -24,7 +24,16 @@ class KeyCLI(object):
     '''
     def __init__(self, opts):
         self.opts = opts
-        self.key = Key(opts)
+        if self.opts['transport'] == 'zeromq':
+            self.key = Key(opts)
+            self.acc = 'minions'
+            self.pend = 'minions_pre'
+            self.rej = 'minions_rejected'
+        else:
+            self.key = RaetKey(opts)
+            self.acc = 'accepted'
+            self.pend = 'pending'
+            self.rej = 'rejected'
 
     def list_status(self, status):
         '''
@@ -33,22 +42,24 @@ class KeyCLI(object):
         keys = self.key.list_keys()
         if status.startswith('acc'):
             salt.output.display_output(
-                {'minions': keys['minions']},
+                {'minions': keys[self.acc]},
                 'key',
                 self.opts
             )
         elif status.startswith(('pre', 'un')):
             salt.output.display_output(
-                {'minions_pre': keys['minions_pre']},
+                {'minions_pre': keys[self.pend]},
                 'key',
                 self.opts
             )
         elif status.startswith('rej'):
             salt.output.display_output(
-                {'minions_rejected': keys['minions_rejected']},
+                {'minions_rejected': keys[self.rej]},
                 'key',
                 self.opts
             )
+        elif status.startswith('all'):
+            self.list_all()
 
     def list_all(self):
         '''
@@ -75,10 +86,10 @@ class KeyCLI(object):
 
         matches = self.key.name_match(match)
         keys = {}
-        if 'minions_pre' in matches:
-            keys['minions_pre'] = matches['minions_pre']
-        if include_rejected and bool(matches.get('minions_rejected')):
-            keys['minions_rejected'] = matches['minions_rejected']
+        if self.pend in matches:
+            keys[self.pend] = matches[self.pend]
+        if include_rejected and bool(matches.get(self.rej)):
+            keys[self.rej] = matches[self.rej]
         if not keys:
             msg = (
                 'The key glob {0!r} does not match any unaccepted {1}keys.'
@@ -130,7 +141,7 @@ class KeyCLI(object):
         '''
         def _print_deleted(matches, after_match):
             deleted = []
-            for keydir in ('minions', 'minions_pre', 'minions_rejected'):
+            for keydir in (self.acc, self.pend, self.rej):
                 deleted.extend(list(
                     set(matches.get(keydir, [])).difference(
                         set(after_match.get(keydir, []))
@@ -183,10 +194,10 @@ class KeyCLI(object):
         Reject the matched keys
         '''
         def _print_rejected(matches, after_match):
-            if 'minions_rejected' in after_match:
+            if self.rej in after_match:
                 rejected = sorted(
-                    set(after_match['minions_rejected']).difference(
-                        set(matches.get('minions_rejected', []))
+                    set(after_match[self.rej]).difference(
+                        set(matches.get(self.rej, []))
                     )
                 )
                 for key in rejected:
@@ -194,10 +205,10 @@ class KeyCLI(object):
 
         matches = self.key.name_match(match)
         keys = {}
-        if 'minions_pre' in matches:
-            keys['minions_pre'] = matches['minions_pre']
-        if include_accepted and bool(matches.get('minions')):
-            keys['minions'] = matches['minions']
+        if self.pend in matches:
+            keys[self.pend] = matches[self.pend]
+        if include_accepted and bool(matches.get(self.acc)):
+            keys[self.acc] = matches[self.acc]
         if not keys:
             msg = 'The key glob {0!r} does not match any {1} keys.'.format(
                 match,
@@ -314,7 +325,11 @@ class Key(object):
     '''
     def __init__(self, opts):
         self.opts = opts
-        self.event = salt.utils.event.MasterEvent(opts['sock_dir'])
+        self.event = salt.utils.event.get_event(
+                'master',
+                opts['sock_dir'],
+                opts['transport'],
+                listen=False)
 
     def _check_minions_directories(self):
         '''
@@ -703,7 +718,7 @@ class RaetKey(Key):
         Return a dict of local keys
         '''
         ret = {'local': []}
-        fn_ = os.path.join(self.opts['pki_dir'], 'master.key')
+        fn_ = os.path.join(self.opts['pki_dir'], 'local.key')
         if os.path.isfile(fn_):
             ret['local'].append(fn_)
         return ret
@@ -976,7 +991,7 @@ class RaetKey(Key):
 
     def finger_all(self):
         '''
-        Return fingerprins for all keys
+        Return fingerprints for all keys
         '''
         ret = {}
         for status, keys in self.list_keys().items():
@@ -988,3 +1003,50 @@ class RaetKey(Key):
                     path = os.path.join(self.opts['pki_dir'], status, key)
                 ret[status][key] = self._get_key_finger(path)
         return ret
+
+    def read_all_remote(self):
+        '''
+        Return a dict of all remote key data
+        '''
+        data = {}
+        for status, mids in self.list_keys().items():
+            for mid in mids:
+                keydata = self.read_remote(mid, status)
+                if keydata:
+                    keydata['acceptance'] = status
+                    data[keydata['device_id']] = keydata
+
+        return data
+
+    def read_remote(self, minion_id, status='accepted'):
+        '''
+        Read in a remote key of status
+        '''
+        path = os.path.join(self.opts['pki_dir'], status, minion_id)
+        if not os.path.isfile(path):
+            return {}
+        with salt.utils.fopen(path, 'rb') as fp_:
+            return self.serial.loads(fp_.read())
+
+    def read_local(self):
+        '''
+        Read in the local private keys, return an empy dict if the keys do not
+        exist
+        '''
+        path = os.path.join(self.opts['pki_dir'], 'local.key')
+        if not os.path.isfile(path):
+            return {}
+        with salt.utils.fopen(path, 'rb') as fp_:
+            return self.serial.loads(fp_.read())
+
+    def write_local(self, priv, sign):
+        '''
+        Write the private key and the signing key to a file on disk
+        '''
+        keydata = {'priv': priv,
+                   'sign': sign}
+        path = os.path.join(self.opts['pki_dir'], 'local.key')
+        c_umask = os.umask(191)
+        with salt.utils.fopen(path, 'w+') as fp_:
+            fp_.write(self.serial.dumps(keydata))
+        os.umask(c_umask)

@@ -15,7 +15,6 @@ import shutil
 import subprocess
 import sys
 import traceback
-import yaml
 
 # Import salt libs
 import salt.utils
@@ -28,7 +27,6 @@ from salt.log import LOG_LEVELS
 # Only available on POSIX systems, nonfatal on windows
 try:
     import pwd
-    import grp
 except ImportError:
     pass
 
@@ -69,11 +67,14 @@ def _chugid(runas):
     #        and g.gr_gid not in supgroups_seen and not supgroups_seen.add(g.gr_gid)
     # ]
 
-    supgroups = [g.gr_gid for g in grp.getgrall()
-                      if uinfo.pw_name in g.gr_mem
-                          and g.gr_gid not in supgroups_seen
-                          and not supgroups_seen.add(g.gr_gid)
-                ]
+    group_list = __salt__['user.list_groups'](runas)
+    supgroups = []
+    for group_name in group_list:
+        gid = __salt__['group.info'](group_name)['gid']
+        if (gid not in supgroups_seen
+           and not supgroups_seen.add(gid)):
+            supgroups.append(gid)
+
     # No logging can happen on this function
     #
     # 08:46:32,161 [salt.loaded.int.module.cmdmod:276 ][DEBUG   ] stderr: Traceback (most recent call last):
@@ -218,7 +219,7 @@ def _run(cmd,
          runas=None,
          shell=DEFAULT_SHELL,
          python_shell=True,
-         env=(),
+         env=None,
          clean_env=False,
          rstrip=True,
          template=None,
@@ -283,16 +284,13 @@ def _run(cmd,
 
     if not env:
         env = {}
-    elif isinstance(env, basestring):
-        try:
-            env = yaml.safe_load(env)
-        except yaml.parser.ParserError as err:
-            log.error(err)
-            env = {}
-    if not isinstance(env, dict):
-        log.error('Invalid input: {0}, must be a dict or '
-                  'string - yaml represented dict'.format(env))
-        env = {}
+    if isinstance(env, list):
+        env = salt.utils.repack_dictlist(env)
+
+    for bad_env_key in (x for x, y in env.iteritems() if y is None):
+        log.error('Environment variable {0!r} passed without a value. '
+                  'Setting value to an empty string'.format(bad_env_key))
+        env[bad_env_key] = ''
 
     if runas and salt.utils.is_windows():
         # TODO: Figure out the proper way to do this in windows
@@ -418,6 +416,7 @@ def _run(cmd,
     except TimedProcTimeoutError as exc:
         ret['stdout'] = str(exc)
         ret['stderr'] = ''
+        ret['retcode'] = None
         ret['pid'] = proc.process.pid
         # ok return code for timeouts?
         ret['retcode'] = 1
@@ -449,7 +448,7 @@ def _run_quiet(cmd,
                runas=None,
                shell=DEFAULT_SHELL,
                python_shell=True,
-               env=(),
+               env=None,
                template=None,
                umask=None,
                timeout=None,
@@ -480,7 +479,7 @@ def _run_all_quiet(cmd,
                    runas=None,
                    shell=DEFAULT_SHELL,
                    python_shell=True,
-                   env=(),
+                   env=None,
                    template=None,
                    umask=None,
                    timeout=None,
@@ -511,7 +510,7 @@ def run(cmd,
         runas=None,
         shell=DEFAULT_SHELL,
         python_shell=True,
-        env=(),
+        env=None,
         clean_env=False,
         template=None,
         rstrip=True,
@@ -520,6 +519,7 @@ def run(cmd,
         quiet=False,
         timeout=None,
         reset_system_locale=True,
+        ignore_retcode=False,
         saltenv='base',
         **kwargs):
     '''
@@ -593,7 +593,7 @@ def run(cmd,
 
     lvl = _check_loglevel(output_loglevel, quiet)
     if lvl is not None:
-        if ret['retcode'] != 0:
+        if not ignore_retcode and ret['retcode'] != 0:
             if lvl < LOG_LEVELS['error']:
                 lvl = LOG_LEVELS['error']
             log.error(
@@ -610,7 +610,7 @@ def run_stdout(cmd,
                runas=None,
                shell=DEFAULT_SHELL,
                python_shell=True,
-               env=(),
+               env=None,
                clean_env=False,
                template=None,
                rstrip=True,
@@ -619,6 +619,7 @@ def run_stdout(cmd,
                quiet=False,
                timeout=None,
                reset_system_locale=True,
+               ignore_retcode=False,
                saltenv='base',
                **kwargs):
     '''
@@ -668,7 +669,7 @@ def run_stdout(cmd,
 
     lvl = _check_loglevel(output_loglevel, quiet)
     if lvl is not None:
-        if ret['retcode'] != 0:
+        if not ignore_retcode and ret['retcode'] != 0:
             if lvl < LOG_LEVELS['error']:
                 lvl = LOG_LEVELS['error']
             log.error(
@@ -679,6 +680,8 @@ def run_stdout(cmd,
             log.log(lvl, 'stdout: {0}'.format(ret['stdout']))
         if ret['stderr']:
             log.log(lvl, 'stderr: {0}'.format(ret['stderr']))
+        if ret['retcode']:
+            log.log(lvl, 'retcode: {0}'.format(ret['retcode']))
     return ret['stdout']
 
 
@@ -688,7 +691,7 @@ def run_stderr(cmd,
                runas=None,
                shell=DEFAULT_SHELL,
                python_shell=True,
-               env=(),
+               env=None,
                clean_env=False,
                template=None,
                rstrip=True,
@@ -697,6 +700,7 @@ def run_stderr(cmd,
                quiet=False,
                timeout=None,
                reset_system_locale=True,
+               ignore_retcode=False,
                saltenv='base',
                **kwargs):
     '''
@@ -746,7 +750,7 @@ def run_stderr(cmd,
 
     lvl = _check_loglevel(output_loglevel, quiet)
     if lvl is not None:
-        if ret['retcode'] != 0:
+        if not ignore_retcode and ret['retcode'] != 0:
             if lvl < LOG_LEVELS['error']:
                 lvl = LOG_LEVELS['error']
             log.error(
@@ -757,6 +761,8 @@ def run_stderr(cmd,
             log.log(lvl, 'stdout: {0}'.format(ret['stdout']))
         if ret['stderr']:
             log.log(lvl, 'stderr: {0}'.format(ret['stderr']))
+        if ret['retcode']:
+            log.log(lvl, 'retcode: {0}'.format(ret['retcode']))
     return ret['stderr']
 
 
@@ -766,7 +772,7 @@ def run_all(cmd,
             runas=None,
             shell=DEFAULT_SHELL,
             python_shell=True,
-            env=(),
+            env=None,
             clean_env=False,
             template=None,
             rstrip=True,
@@ -775,6 +781,7 @@ def run_all(cmd,
             quiet=False,
             timeout=None,
             reset_system_locale=True,
+            ignore_retcode=False,
             saltenv='base',
             **kwargs):
     '''
@@ -824,7 +831,7 @@ def run_all(cmd,
 
     lvl = _check_loglevel(output_loglevel, quiet)
     if lvl is not None:
-        if ret['retcode'] != 0:
+        if not ignore_retcode and ret['retcode'] != 0:
             if lvl < LOG_LEVELS['error']:
                 lvl = LOG_LEVELS['error']
             log.error(
@@ -835,6 +842,8 @@ def run_all(cmd,
             log.log(lvl, 'stdout: {0}'.format(ret['stdout']))
         if ret['stderr']:
             log.log(lvl, 'stderr: {0}'.format(ret['stderr']))
+        if ret['retcode']:
+            log.log(lvl, 'retcode: {0}'.format(ret['retcode']))
     return ret
 
 
@@ -844,7 +853,7 @@ def retcode(cmd,
             runas=None,
             shell=DEFAULT_SHELL,
             python_shell=True,
-            env=(),
+            env=None,
             clean_env=False,
             template=None,
             umask=None,
@@ -852,6 +861,7 @@ def retcode(cmd,
             quiet=False,
             timeout=None,
             reset_system_locale=True,
+            ignore_retcode=False,
             saltenv='base',
             **kwargs):
     '''
@@ -901,7 +911,7 @@ def retcode(cmd,
 
     lvl = _check_loglevel(output_loglevel, quiet)
     if lvl is not None:
-        if ret['retcode'] != 0:
+        if not ignore_retcode and ret['retcode'] != 0:
             if lvl < LOG_LEVELS['error']:
                 lvl = LOG_LEVELS['error']
             log.error(
@@ -912,6 +922,45 @@ def retcode(cmd,
     return ret['retcode']
 
 
+def _retcode_quiet(cmd,
+                   cwd=None,
+                   stdin=None,
+                   runas=None,
+                   shell=DEFAULT_SHELL,
+                   python_shell=True,
+                   env=None,
+                   clean_env=False,
+                   template=None,
+                   umask=None,
+                   output_loglevel='quiet',
+                   quiet=True,
+                   timeout=None,
+                   reset_system_locale=True,
+                   ignore_retcode=False,
+                   saltenv='base',
+                   **kwargs):
+    '''
+    Helper for running commands quietly for minion startup.
+    Returns same as retcode
+    '''
+    return retcode(cmd,
+                   cwd=cwd,
+                   stdin=stdin,
+                   runas=runas,
+                   shell=shell,
+                   python_shell=python_shell,
+                   env=env,
+                   clean_env=clean_env,
+                   template=template,
+                   umask=umask,
+                   output_loglevel=output_loglevel,
+                   timeout=timeout,
+                   reset_system_locale=reset_system_locale,
+                   ignore_retcode=ignore_retcode,
+                   saltenv=saltenv,
+                   **kwargs)
+
+
 def script(source,
            args=None,
            cwd=None,
@@ -919,7 +968,7 @@ def script(source,
            runas=None,
            shell=DEFAULT_SHELL,
            python_shell=True,
-           env=(),
+           env=None,
            template='jinja',
            umask=None,
            output_loglevel='info',
@@ -1023,7 +1072,7 @@ def script_retcode(source,
                    runas=None,
                    shell=DEFAULT_SHELL,
                    python_shell=True,
-                   env=(),
+                   env=None,
                    template='jinja',
                    umask=None,
                    timeout=None,
@@ -1117,7 +1166,7 @@ def has_exec(cmd):
 
         salt '*' cmd.has_exec cat
     '''
-    return bool(which(cmd))
+    return which(cmd) is not None
 
 
 def exec_code(lang, code, cwd=None):

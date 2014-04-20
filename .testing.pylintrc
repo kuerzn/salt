@@ -132,6 +132,8 @@ bad-functions=apply,input
 
 
 [FORMAT]
+# Maximum number of characters on a single line.
+max-line-length=120
 
 # String used as indentation unit. This is usually " " (4 spaces) or "\t" (1
 # tab).
@@ -142,7 +144,7 @@ indent-string='    '
 
 # List of additional names supposed to be defined in builtins. Remember that
 # you should avoid to define new builtins when possible.
-additional-builtins=__opts__,__salt__,__pillar__,__grains__,__context__,__ret__,__env__,__low__,__lowstate__,__running__,__active_provider_name__
+additional-builtins=__opts__,__salt__,__pillar__,__grains__,__context__,__ret__,__env__,__low__,__states__,__lowstate__,__running__,__active_provider_name__
 
 
 [IMPORTS]

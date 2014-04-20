@@ -19,11 +19,13 @@ SALT_CRON_NO_IDENTIFIER = 'NO ID SET'
 def _encode(string):
     if isinstance(string, unicode):
         string = string.encode('utf-8')
+    elif not string:
+        string = ''
     return "{0}".format(string)
 
 
 def _cron_id(cron):
-    '''SAFEBELT, Oanly setted if we really have an identifier'''
+    '''SAFETYBELT, Only set if we really have an identifier'''
     cid = None
     if cron['identifier']:
         cid = cron['identifier']
@@ -36,23 +38,40 @@ def _cron_id(cron):
 def _cron_matched(cron, cmd, identifier=None):
     '''Check if:
       - we find a cron with same cmd, old state behavior
-      - but also be enough smart to remove states changed crons where we do
-        not removed priorly by a cron.absent by matching on the providen
+      - but also be smart enough to remove states changed crons where we do
+        not removed priorly by a cron.absent by matching on the provided
         identifier.
         We assure retrocompatiblity by only checking on identifier if
-        and only an identifier was set on the serialized crontab
+        and only if an identifier was set on the serialized crontab
     '''
     ret, id_matched = False, None
     cid = _cron_id(cron)
     if cid:
+        if not identifier:
+            identifier = SALT_CRON_NO_IDENTIFIER
         eidentifier = _encode(identifier)
+        # old style second round
+        # after saving crontab, we must check that if
+        # we have not the same command, but the default id
+        # to not set that as a match
         if (
-            cron.get('cmd', None) == cmd
+            cron.get('cmd', None) != cmd
             and cid == SALT_CRON_NO_IDENTIFIER
-            and identifier
+            and eidentifier == SALT_CRON_NO_IDENTIFIER
         ):
-            cid = eidentifier
-        id_matched = eidentifier == cid
+            id_matched = False
+        else:
+            # on saving, be sure not to overwrite a cron
+            # with specific identifier but also track
+            # crons where command is the same
+            # but with the default if that we gonna overwrite
+            if (
+                cron.get('cmd', None) == cmd
+                and cid == SALT_CRON_NO_IDENTIFIER
+                and identifier
+            ):
+                cid = eidentifier
+            id_matched = eidentifier == cid
     if (
         ((id_matched is None) and cmd == cron.get('cmd', None))
         or id_matched
@@ -94,7 +113,8 @@ def _render_tab(lst):
         if cron['comment'] is not None or cron['identifier'] is not None:
             comment = '#'
             if cron['comment']:
-                comment += ' {0}'.format(cron['comment'])
+                comment += ' {0}'.format(
+                    cron['comment'].rstrip().replace('\n', '\n# '))
             if cron['identifier']:
                 comment += ' {0}:{1}'.format(SALT_CRON_IDENTIFIER,
                                              cron['identifier'])
@@ -338,7 +358,7 @@ def set_job(user,
             month,
             dayweek,
             cmd,
-            comment,
+            comment=None,
             identifier=None):
     '''
     Sets a cron job up for a specified user.
@@ -359,8 +379,12 @@ def set_job(user,
     for cron in lst['crons']:
         cid = _cron_id(cron)
         if _cron_matched(cron, cmd, identifier):
+            test_setted_id = (
+                cron['identifier'] is None
+                and SALT_CRON_NO_IDENTIFIER
+                or cron['identifier'])
             tests = [(cron['comment'], comment),
-                     (cron['identifier'], identifier),
+                     (identifier, test_setted_id),
                      (cron['minute'], minute),
                      (cron['hour'], hour),
                      (cron['daymonth'], daymonth),
@@ -392,6 +416,11 @@ def set_job(user,
                     ):
                         if identifier:
                             cid = identifier
+                        if (
+                            cid == SALT_CRON_NO_IDENTIFIER
+                            and cron['identifier'] is None
+                        ):
+                            cid = None
                         cron['identifier'] = cid
                 if not cid or (
                     cid and not _needs_change(cid, identifier)

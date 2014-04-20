@@ -17,7 +17,7 @@ The salt.state declaration can call out a highstate or a list of sls:
           - core
         - saltenv: prod
 
-    databasees:
+    databases:
       salt.state:
         - tgt: role:database
         - tgt_type: grain
@@ -29,6 +29,7 @@ import logging
 
 # Import salt libs
 import salt.utils
+import salt._compat
 
 log = logging.getLogger(__name__)
 
@@ -54,8 +55,9 @@ def state(
         sls=None,
         env=None,
         test=False,
-        fail_minions='',
+        fail_minions=None,
         allow_fail=0,
+        concurrent=False,
         timeout=None):
     '''
     Invoke a state run on a given target
@@ -92,8 +94,15 @@ def state(
 
     fail_minions
         An optional list of targeted minions where failure is an option
+
+    concurrent
+        Allow multiple state runs to occur at once.
+
+        WARNING: This flag is potentially dangerous. It is designed
+        for use when multiple state runs can safely be run at the same
+        Do not use this flag for performance optimization.
     '''
-    cmd_kw = {'arg': [], 'ret': ret, 'timeout': timeout}
+    cmd_kw = {'arg': [], 'kwarg': {}, 'ret': ret, 'timeout': timeout}
 
     ret = {'name': name,
            'changes': {},
@@ -135,10 +144,19 @@ def state(
         ret['comment'] = 'No highstate or sls specified, no execution made'
         ret['result'] = False
         return ret
+
     if test:
-        cmd_kw['arg'].append('test={0}'.format(test))
-    if __env__ != 'base':
-        cmd_kw['arg'].append('saltenv={0}'.format(__env__))
+        cmd_kw['kwarg']['test'] = test
+
+    cmd_kw['kwarg']['saltenv'] = __env__
+
+    if isinstance(concurrent, bool):
+        cmd_kw['kwarg']['concurrent'] = concurrent
+    else:
+        ret['comment'] = ('Must pass in boolean for value of \'concurrent\'')
+        ret['result'] = False
+        return ret
+
     if __opts__['test'] is True:
         ret['comment'] = (
                 'State run to be executed on target {0} as test={1}'
@@ -151,14 +169,24 @@ def state(
     fail = set()
     failures = {}
     no_change = set()
-    if isinstance(fail_minions, str):
-        fail_minions = [fail_minions]
+
+    if fail_minions is None:
+        fail_minions = ()
+    elif isinstance(fail_minions, salt._compat.string_types):
+        fail_minions = [minion.strip() for minion in fail_minions.split(',')]
+    elif not isinstance(fail_minions, list):
+        ret.setdefault('warnings', []).append(
+            '\'fail_minions\' needs to be a list or a comma separated '
+            'string. Ignored.'
+        )
+        fail_minions = ()
 
     for minion, mdata in cmd_ret.iteritems():
         if mdata['out'] != 'highstate':
             log.warning("Output from salt state not highstate")
         m_ret = mdata['ret']
-        m_state = salt.utils.check_state_result({minion: m_ret})
+        m_state = salt.utils.check_state_result(m_ret)
+
         if not m_state:
             if minion not in fail_minions:
                 fail.add(minion)
@@ -205,6 +233,7 @@ def function(
         expr_form=None,
         ret='',
         arg=None,
+        kwarg=None,
         timeout=None):
     '''
     Execute a single module function on a remote minion via salt or salt-ssh
@@ -221,13 +250,19 @@ def function(
     arg
         The list of arguments to pass into the function
 
+    kwarg
+        The list of keyword arguments to pass into the function
+
     ret
         Optionally set a single or a list of returners to use
 
     ssh
         Set to `True` to use the ssh client instaed of the standard salt client
     '''
-    cmd_kw = {'arg': arg or [], 'ret': ret, 'timeout': timeout}
+    if kwarg is None:
+        kwarg = {}
+
+    cmd_kw = {'arg': arg or [], 'kwarg': kwarg, 'ret': ret, 'timeout': timeout}
 
     ret = {'name': name,
            'changes': {},

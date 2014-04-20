@@ -16,6 +16,7 @@ import yaml
 
 # Import salt libs
 import salt.utils
+import salt.utils.pkg
 from salt._compat import string_types
 from salt.exceptions import (
     CommandExecutionError, MinionError, SaltInvocationError
@@ -28,19 +29,19 @@ log = logging.getLogger(__name__)
 try:
     from aptsources import sourceslist
     apt_support = True
-except ImportError as e:
+except ImportError:
     apt_support = False
 
 try:
     import softwareproperties.ppa
     ppa_format_support = True
-except ImportError as e:
+except ImportError:
     ppa_format_support = False
 
 try:
-    import apt.debfile
+    import apt.debfile  # pylint: disable=E0611
     resolve_dep_support = True
-except ImportError as e:
+except ImportError:
     resolve_dep_support = False
 
 # Source format for urllib fallback on PPA handling
@@ -574,6 +575,128 @@ def upgrade(refresh=True, **kwargs):
     return salt.utils.compare_dicts(old, new)
 
 
+def hold(name=None, pkgs=None, **kwargs):
+    '''
+    Set package in 'hold' state, meaning it will not be upgraded.
+
+    name
+        The name of the package, e.g., 'tmux'
+
+        CLI Example:
+
+        .. code-block:: bash
+
+            salt '*' pkg.hold <package name>
+
+    pkgs
+        A list of packages to hold. Must be passed as a python list.
+
+        CLI Example:
+
+        .. code-block:: bash
+
+            salt '*' pkg.hold pkgs='["foo", "bar"]'
+
+    .. versionadded:: Helium
+
+    '''
+
+    if not name and not pkgs:
+        return 'Error: name or pkgs needs to be specified.'
+
+    if name and not pkgs:
+        pkgs = []
+        pkgs.append(name)
+
+    ret = {}
+    for pkg in pkgs:
+
+        if isinstance(pkg, dict):
+            pkg = pkg.keys()[0]
+
+        ret[pkg] = {'name': pkg, 'changes': {}, 'result': False, 'comment': ''}
+        state = get_selections(pattern=pkg, state=hold)
+        if not state:
+            ret[pkg]['comment'] = 'Package {0} not currently held.'.format(pkg)
+        elif not salt.utils.is_true(state.get('hold', False)):
+            if 'test' in kwargs and kwargs['test']:
+                ret[pkg].update(result=None)
+                ret[pkg]['comment'] = 'Package {0} is set to be held.'.format(pkg)
+            else:
+                result = set_selections(
+                    selection={'hold': [pkg]}
+                )
+                ret[pkg].update(changes=result[pkg], result=True)
+                ret[pkg]['comment'] = 'Package {0} is now being held.'.format(pkg)
+        else:
+            ret[pkg].update(result=True)
+            ret[pkg]['comment'] = 'Package {0} is already set to be held.'.format(pkg)
+    return ret
+
+
+def unhold(name=None, pkgs=None, **kwargs):
+    '''
+    Set package current in 'hold' state to install state,
+    meaning it will be upgraded.
+
+    name
+        The name of the package, e.g., 'tmux'
+
+        CLI Example:
+
+        .. code-block:: bash
+
+            salt '*' pkg.unhold <package name>
+
+    pkgs
+        A list of packages to hold. Must be passed as a python list.
+
+        CLI Example:
+
+        .. code-block:: bash
+
+            salt '*' pkg.unhold pkgs='["foo", "bar"]'
+
+    .. versionadded:: Helium
+
+    '''
+
+    log.debug('calling unhold {0}')
+    if not name and not pkgs:
+        return 'Error: name or pkgs needs to be specified.'
+
+    if name and not pkgs:
+        pkgs = []
+        pkgs.append(name)
+
+    ret = {}
+    for pkg in pkgs:
+
+        if isinstance(pkg, dict):
+            pkg = pkg.keys()[0]
+
+        ret[pkg] = {'changes': {}, 'result': False, 'comment': ''}
+        state = get_selections(pattern=pkg)
+        if not state:
+            ret[pkg]['comment'] = 'Package {0} does not have a state.'.format(pkg)
+        elif salt.utils.is_true(state.get('hold', False)):
+            if 'test' in kwargs and kwargs['test']:
+                ret[pkg].update(result=None)
+                ret['comment'] = 'Package {0} is set not to be held.'.format(pkg)
+            else:
+                result = set_selections(
+                    selection={'install': [pkg]}
+                )
+                ret[pkg].update(changes=result[pkg], result=True)
+                ret[pkg]['comment'] = 'Package {0} is no longer being held.'.format(pkg)
+        else:
+            ret[pkg].update(result=True)
+            ret[pkg]['comment'] = 'Package {0} is already set not to be held.'.format(pkg)
+
+    log.debug('in unhold {0}'.format(ret))
+    return ret
+
+
 def _clean_pkglist(pkgs):
     '''
     Go through package list and, if any packages have more than one virtual
@@ -589,19 +712,34 @@ def _clean_pkglist(pkgs):
             pkgs[name] = stripped
 
 
-def list_pkgs(versions_as_list=False, removed=False, **kwargs):
+def list_pkgs(versions_as_list=False,
+              removed=False,
+              purge_desired=False,
+              **kwargs):
     '''
     List the packages currently installed in a dict::
 
         {'<package_name>': '<version>'}
 
-    If removed is ``True``, then only packages which have been removed (but not
-    purged) will be returned.
+    removed
+        If ``True``, then only packages which have been removed (but not
+        purged) will be returned.
+
+    purge_desired
+        If ``True``, then only packages which have been marked to be purged,
+        but can't be purged due to their status as dependencies for other
+        installed packages, will be returned. Note that these packages will
+        appear in installed
+
+        .. versionchanged:: 2014.1.1
+
+            Packages in this state now correctly show up in the output of this
+            function.
 
     External dependencies::
 
-        Virtual package resolution requires dctrl-tools.
-        Without dctrl-tools virtual packages will be reported as not installed.
+        Virtual package resolution requires dctrl-tools. Without dctrl-tools
+        virtual packages will be reported as not installed.
 
     CLI Example:
 
@@ -612,17 +750,20 @@ def list_pkgs(versions_as_list=False, removed=False, **kwargs):
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
     removed = salt.utils.is_true(removed)
+    purge_desired = salt.utils.is_true(purge_desired)
 
     if 'pkg.list_pkgs' in __context__:
         if removed:
             ret = copy.deepcopy(__context__['pkg.list_pkgs']['removed'])
         else:
-            ret = copy.deepcopy(__context__['pkg.list_pkgs']['installed'])
+            ret = copy.deepcopy(__context__['pkg.list_pkgs']['purge_desired'])
+            if not purge_desired:
+                ret.update(__context__['pkg.list_pkgs']['installed'])
         if not versions_as_list:
             __salt__['pkg_resource.stringify'](ret)
         return ret
 
-    ret = {'installed': {}, 'removed': {}}
+    ret = {'installed': {}, 'removed': {}, 'purge_desired': {}}
     cmd = 'dpkg-query --showformat=\'${Status} ${Package} ' \
           '${Version} ${Architecture}\n\' -W'
 
@@ -651,6 +792,10 @@ def list_pkgs(versions_as_list=False, removed=False, **kwargs):
                 __salt__['pkg_resource.add_pkg'](ret['removed'],
                                                  name,
                                                  version_num)
+            elif 'purge' in linetype and status == 'installed':
+                __salt__['pkg_resource.add_pkg'](ret['purge_desired'],
+                                                 name,
+                                                 version_num)
 
     # Check for virtual packages. We need dctrl-tools for this.
     if not removed and __salt__['cmd.has_exec']('grep-available'):
@@ -665,7 +810,7 @@ def list_pkgs(versions_as_list=False, removed=False, **kwargs):
             # Set virtual package versions to '1'
             __salt__['pkg_resource.add_pkg'](ret['installed'], virtname, '1')
 
-    for pkglist_type in ('installed', 'removed'):
+    for pkglist_type in ('installed', 'removed', 'purge_desired'):
         __salt__['pkg_resource.sort_pkglist'](ret[pkglist_type])
         _clean_pkglist(ret[pkglist_type])
 
@@ -674,7 +819,9 @@ def list_pkgs(versions_as_list=False, removed=False, **kwargs):
     if removed:
         ret = ret['removed']
     else:
-        ret = ret['installed']
+        ret = copy.deepcopy(__context__['pkg.list_pkgs']['purge_desired'])
+        if not purge_desired:
+            ret.update(__context__['pkg.list_pkgs']['installed'])
     if not versions_as_list:
         __salt__['pkg_resource.stringify'](ret)
     return ret
@@ -754,10 +901,13 @@ def version_cmp(pkg1, pkg2):
         for oper, ret in (('lt', -1), ('eq', 0), ('gt', 1)):
             cmd = 'dpkg --compare-versions {0!r} {1} ' \
                   '{2!r}'.format(pkg1, oper, pkg2)
-            if __salt__['cmd.retcode'](cmd, output_loglevel='debug') == 0:
+            retcode = __salt__['cmd.retcode'](
+                cmd, output_loglevel='debug', ignore_retcode=True
+            )
+            if retcode == 0:
                 return ret
-    except Exception as e:
-        log.error(e)
+    except Exception as exc:
+        log.error(exc)
     return None
 
 
@@ -1080,7 +1230,7 @@ def mod_repo(repo, saltenv='base', **kwargs):
                 # These will defer to any user-defined variants
                 kwargs['dist'] = dist
                 ppa_auth = ''
-                if file not in kwargs:
+                if 'file' not in kwargs:
                     filename = '/etc/apt/sources.list.d/{0}-{1}-{2}.list'
                     kwargs['file'] = filename.format(owner_name, ppa_name,
                                                      dist)
@@ -1102,11 +1252,11 @@ def mod_repo(repo, saltenv='base', **kwargs):
                         'Launchpad does not know about {0}/{1}: {2}'.format(
                             owner_name, ppa_name, exc)
                     )
-                except IndexError as e:
+                except IndexError as exc:
                     raise CommandExecutionError(
                         'Launchpad knows about {0}/{1} but did not '
                         'return a fingerprint. Please set keyid '
-                        'manually: {2}'.format(owner_name, ppa_name, e)
+                        'manually: {2}'.format(owner_name, ppa_name, exc)
                     )
 
                 if 'keyserver' not in kwargs:
@@ -1553,7 +1703,7 @@ def _resolve_deps(name, pkgs, **kwargs):
     '''
     missing_deps = []
     for pkg_file in pkgs:
-        deb = apt.debfile.DebPackage(filename=pkg_file)
+        deb = apt.debfile.DebPackage(filename=pkg_file, cache=apt.Cache())
         if deb.check():
             missing_deps.extend(deb.missing_deps)
 
@@ -1564,8 +1714,12 @@ def _resolve_deps(name, pkgs, **kwargs):
         cmd.append('install')
         cmd.extend(missing_deps)
 
-        ret = __salt__['cmd.retcode'](cmd, env=kwargs.get('env'), python_shell=False,
-                output_loglevel='debug')
+        ret = __salt__['cmd.retcode'](
+            cmd,
+            env=kwargs.get('env'),
+            python_shell=False,
+            output_loglevel='debug'
+        )
 
         if ret != 0:
             raise CommandExecutionError(
@@ -1579,3 +1733,20 @@ def _resolve_deps(name, pkgs, **kwargs):
             except MinionError as exc:
                 raise CommandExecutionError(exc)
     return
+
+
+def owner(*paths):
+    '''
+    Return the name of the package that owns the specified file. Files may be
+    passed as a string (``path``) or as a list of strings (``paths``). If
+    ``path`` contains a comma, it will be converted to ``paths``. If a file
+    name legitimately contains a comma, pass it in via ``paths``.
+
+    CLI Example:
+
+        salt '*' pkg.owner /usr/bin/apachectl
+        salt '*' pkg.owner /usr/bin/apachectl /etc/httpd/conf/httpd.conf
+    '''
+    cmd = "dpkg -S {0} | cut -d':' -f1"
+    return salt.utils.pkg.find_owner(
+        __salt__['cmd.run'], cmd, *paths)

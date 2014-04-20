@@ -18,24 +18,12 @@ The data structure needs to be:
 # 3. What arguments need to be passed to the function?
 # 4. How long do we wait for all of the replies?
 #
-# Next there are a number of tasks, first we need some kind of authentication
-# This Client initially will be the master root client, which will run as
-# the root user on the master server.
-#
-# BUT we also want a client to be able to work over the network, so that
-# controllers can exist within disparate applications.
-#
-# The problem is that this is a security nightmare, so I am going to start
-# small, and only start with the ability to execute salt commands locally.
-# This means that the primary client to build is, the LocalClient
-
 # Import python libs
 from __future__ import print_function
 import os
 import glob
 import time
 import copy
-import getpass
 import logging
 from datetime import datetime
 
@@ -44,13 +32,15 @@ import salt.config
 import salt.payload
 import salt.transport
 import salt.utils
-import salt.utils.verify
+import salt.utils.args
 import salt.utils.event
 import salt.utils.minions
+import salt.utils.verify
 import salt.syspaths as syspaths
 from salt.exceptions import (
     EauthAuthenticationError, SaltInvocationError, SaltReqTimeoutError
 )
+from salt._compat import string_types
 
 # Try to import range from https://github.com/ytoolshed/range
 HAS_RANGE = False
@@ -63,16 +53,25 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
-def condition_kwarg(arg, kwarg):
+def get_local_client(
+        c_path=os.path.join(syspaths.CONFIG_DIR, 'master'),
+        mopts=None):
     '''
-    Return a single arg structure for the publisher to safely use
+    .. versionadded:: Helium
+
+    Read in the config and return the correct LocalClient object based on
+    the configured transport
     '''
-    if isinstance(kwarg, dict):
-        kw_ = {'__kwarg__': True}
-        for key, val in kwarg.items():
-            kw_[key] = val
-        return list(arg) + [kw_]
-    return arg
+    if mopts:
+        opts = mopts
+    else:
+        import salt.config
+        opts = salt.config.client_config(c_path)
+    if opts['transport'] == 'raet':
+        import salt.client.raet
+        return salt.client.raet.LocalClient(mopts=opts)
+    elif opts['transport'] == 'zeromq':
+        return LocalClient(mopts=opts)
 
 
 class LocalClient(object):
@@ -112,7 +111,11 @@ class LocalClient(object):
         self.serial = salt.payload.Serial(self.opts)
         self.salt_user = self.__get_user()
         self.key = self.__read_master_key()
-        self.event = salt.utils.event.LocalClientEvent(self.opts['sock_dir'])
+        self.event = salt.utils.event.get_event(
+                'master',
+                self.opts['sock_dir'],
+                self.opts['transport'],
+                listen=not self.opts.get('__worker', False))
 
     def __read_master_key(self):
         '''
@@ -140,7 +143,7 @@ class LocalClient(object):
         '''
         Determine the current user running the salt command
         '''
-        user = getpass.getuser()
+        user = salt.utils.get_user()
         # if our user is root, look for other ways to figure out
         # who we are
         if (user == 'root' or user == self.opts['user']) and 'SUDO_USER' in os.environ:
@@ -187,13 +190,12 @@ class LocalClient(object):
         timeout = self.opts['gather_job_timeout']
 
         arg = [jid]
-        arg = condition_kwarg(arg, kwargs)
         pub_data = self.run_job(tgt,
                                 'saltutil.find_job',
                                 arg=arg,
                                 expr_form=tgt_type,
                                 timeout=timeout,
-                                **kwargs)
+                               )
 
         if not pub_data:
             return pub_data
@@ -257,7 +259,7 @@ class LocalClient(object):
             >>> local.run_job('*', 'test.sleep', [300])
             {'jid': '20131219215650131543', 'minions': ['jerry']}
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         jid = ''
 
         # Subscribe to all events and subscribe as early as possible
@@ -297,7 +299,7 @@ class LocalClient(object):
             >>> local.cmd_async('*', 'test.sleep', [300])
             '20131219215921857715'
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         pub_data = self.run_job(tgt,
                                 fun,
                                 arg,
@@ -382,7 +384,7 @@ class LocalClient(object):
             {'stewart': {...}}
         '''
         import salt.cli.batch
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         opts = {'tgt': tgt,
                 'fun': fun,
                 'arg': arg,
@@ -507,7 +509,7 @@ class LocalClient(object):
             minion ID. A compound command will return a sub-dictionary keyed by
             function name.
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         pub_data = self.run_job(tgt,
                                 fun,
                                 arg,
@@ -544,7 +546,7 @@ class LocalClient(object):
         :param verbose: Print extra information about the running command
         :returns: A generator
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         pub_data = self.run_job(
             tgt,
             fun,
@@ -606,7 +608,7 @@ class LocalClient(object):
             {'dave': {'ret': True}}
             {'stewart': {'ret': True}}
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         pub_data = self.run_job(
             tgt,
             fun,
@@ -659,7 +661,7 @@ class LocalClient(object):
             None
             {'stewart': {'ret': True}}
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         pub_data = self.run_job(
             tgt,
             fun,
@@ -676,6 +678,7 @@ class LocalClient(object):
                                                 pub_data['minions'],
                                                 timeout,
                                                 tgt,
+                                                expr_form,
                                                 **kwargs):
                 yield fn_ret
 
@@ -693,7 +696,7 @@ class LocalClient(object):
         '''
         Execute a salt command and return
         '''
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         pub_data = self.run_job(
             tgt,
             fun,
@@ -721,6 +724,7 @@ class LocalClient(object):
             tgt='*',
             tgt_type='glob',
             verbose=False,
+            show_jid=False,
             **kwargs):
         '''
         Starts a watcher looking at the return data for a specified JID
@@ -731,6 +735,8 @@ class LocalClient(object):
             msg = 'Executing job with jid {0}'.format(jid)
             print(msg)
             print('-' * len(msg) + '\n')
+        elif show_jid:
+            print('jid: {0}'.format(jid))
         if timeout is None:
             timeout = self.opts['timeout']
         fret = {}
@@ -832,7 +838,7 @@ class LocalClient(object):
         :returns: all of the information for the JID
         '''
         if not isinstance(minions, set):
-            if isinstance(minions, basestring):
+            if isinstance(minions, string_types):
                 minions = set([minions])
             elif isinstance(minions, (list, tuple)):
                 minions = set(list(minions))
@@ -1081,15 +1087,20 @@ class LocalClient(object):
             timeout=None,
             tgt='*',
             tgt_type='glob',
-            verbose=False):
+            verbose=False,
+            show_jid=False):
         '''
         Get the returns for the command line interface via the event system
         '''
+        log.trace('entered - function get_cli_static_event_returns()')
         minions = set(minions)
         if verbose:
             msg = 'Executing job with jid {0}'.format(jid)
             print(msg)
             print('-' * len(msg) + '\n')
+        elif show_jid:
+            print('jid: {0}'.format(jid))
+
         if timeout is None:
             timeout = self.opts['timeout']
         jid_dir = salt.utils.jid_dir(jid,
@@ -1155,12 +1166,14 @@ class LocalClient(object):
             tgt_type='glob',
             verbose=False,
             show_timeout=False,
+            show_jid=False,
             **kwargs):
         '''
         Get the returns for the command line interface via the event system
         '''
+        log.trace('func get_cli_event_returns()')
         if not isinstance(minions, set):
-            if isinstance(minions, basestring):
+            if isinstance(minions, string_types):
                 minions = set([minions])
             elif isinstance(minions, (list, tuple)):
                 minions = set(list(minions))
@@ -1169,6 +1182,9 @@ class LocalClient(object):
             msg = 'Executing job with jid {0}'.format(jid)
             print(msg)
             print('-' * len(msg) + '\n')
+        elif show_jid:
+            print('jid: {0}'.format(jid))
+
         if timeout is None:
             timeout = self.opts['timeout']
         jid_dir = salt.utils.jid_dir(jid,
@@ -1190,6 +1206,7 @@ class LocalClient(object):
             # Wait 0 == forever, use a minimum of 1s
             wait = max(1, time_left)
             raw = self.event.get_event(wait, jid)
+            log.trace('get_cli_event_returns() called self.event.get_event() and received: raw={0}'.format(raw))
             if raw is not None:
                 if 'minions' in raw.get('data', {}):
                     minions.update(raw['data']['minions'])
@@ -1199,10 +1216,16 @@ class LocalClient(object):
                     continue
                 if 'return' not in raw:
                     continue
+
                 found.add(raw.get('id'))
                 ret = {raw['id']: {'ret': raw['return']}}
                 if 'out' in raw:
                     ret[raw['id']]['out'] = raw['out']
+                if 'retcode' in raw:
+                    ret[raw['id']]['retcode'] = raw['retcode']
+                log.trace('raw = {0}'.format(raw))
+                log.trace('ret = {0}'.format(ret))
+                log.trace('yeilding \'ret\'')
                 yield ret
                 if len(found.intersection(minions)) >= len(minions):
                     # All minions have returned, break out of the loop
@@ -1264,6 +1287,7 @@ class LocalClient(object):
         Gather the return data from the event system, break hard when timeout
         is reached.
         '''
+        log.trace('entered - function get_event_iter_returns()')
         if timeout is None:
             timeout = self.opts['timeout']
         jid_dir = salt.utils.jid_dir(jid,
@@ -1287,6 +1311,72 @@ class LocalClient(object):
                 ret[raw['id']]['out'] = raw['out']
             yield ret
             time.sleep(0.02)
+
+    def _prep_pub(self,
+                  tgt,
+                  fun,
+                  arg,
+                  expr_form,
+                  ret,
+                  jid,
+                  timeout,
+                  **kwargs):
+        '''
+        Set up the payload_kwargs to be sent down to the master
+        '''
+        if expr_form == 'nodegroup':
+            if tgt not in self.opts['nodegroups']:
+                conf_file = self.opts.get(
+                    'conf_file', 'the master config file'
+                )
+                raise SaltInvocationError(
+                    'Node group {0} unavailable in {1}'.format(
+                        tgt, conf_file
+                    )
+                )
+            tgt = salt.utils.minions.nodegroup_comp(tgt,
+                                                    self.opts['nodegroups'])
+            expr_form = 'compound'
+
+        # Convert a range expression to a list of nodes and change expression
+        # form to list
+        if expr_form == 'range' and HAS_RANGE:
+            tgt = self._convert_range_to_list(tgt)
+            expr_form = 'list'
+
+        # If an external job cache is specified add it to the ret list
+        if self.opts.get('ext_job_cache'):
+            if ret:
+                ret += ',{0}'.format(self.opts['ext_job_cache'])
+            else:
+                ret = self.opts['ext_job_cache']
+
+        # format the payload - make a function that does this in the payload
+        #   module
+
+        # Generate the standard keyword args to feed to format_payload
+        payload_kwargs = {'cmd': 'publish',
+                          'tgt': tgt,
+                          'fun': fun,
+                          'arg': arg,
+                          'key': self.key,
+                          'tgt_type': expr_form,
+                          'ret': ret,
+                          'jid': jid}
+
+        # if kwargs are passed, pack them.
+        if kwargs:
+            payload_kwargs['kwargs'] = kwargs
+
+        # If we have a salt user, add it to the payload
+        if self.salt_user:
+            payload_kwargs['user'] = self.salt_user
+
+        # If we're a syndication master, pass the timeout
+        if self.opts['order_masters']:
+            payload_kwargs['to'] = timeout
+
+        return payload_kwargs
 
     def pub(self,
             tgt,
@@ -1323,61 +1413,15 @@ class LocalClient(object):
                                            'publish_pull.ipc')):
             return {'jid': '0', 'minions': []}
 
-        if expr_form == 'nodegroup':
-            if tgt not in self.opts['nodegroups']:
-                conf_file = self.opts.get(
-                    'conf_file', 'the master config file'
-                )
-                raise SaltInvocationError(
-                    'Node group {0} unavailable in {1}'.format(
-                        tgt, conf_file
-                    )
-                )
-            tgt = salt.utils.minions.nodegroup_comp(tgt,
-                                                    self.opts['nodegroups'])
-            expr_form = 'compound'
-
-        # Convert a range expression to a list of nodes and change expression
-        # form to list
-        if expr_form == 'range' and HAS_RANGE:
-            tgt = self._convert_range_to_list(tgt)
-            expr_form = 'list'
-
-        # If an external job cache is specified add it to the ret list
-        if self.opts.get('ext_job_cache'):
-            if ret:
-                ret += ',{0}'.format(self.opts['ext_job_cache'])
-            else:
-                ret = self.opts['ext_job_cache']
-
-        # format the payload - make a function that does this in the payload
-        #   module
-        # make the zmq client
-        # connect to the req server
-        # send!
-        # return what we get back
-
-        # Generate the standard keyword args to feed to format_payload
-        payload_kwargs = {'cmd': 'publish',
-                          'tgt': tgt,
-                          'fun': fun,
-                          'arg': arg,
-                          'key': self.key,
-                          'tgt_type': expr_form,
-                          'ret': ret,
-                          'jid': jid}
-
-        # if kwargs are passed, pack them.
-        if kwargs:
-            payload_kwargs['kwargs'] = kwargs
-
-        # If we have a salt user, add it to the payload
-        if self.salt_user:
-            payload_kwargs['user'] = self.salt_user
-
-        # If we're a syndication master, pass the timeout
-        if self.opts['order_masters']:
-            payload_kwargs['to'] = timeout
+        payload_kwargs = self._prep_pub(
+                tgt,
+                fun,
+                arg,
+                expr_form,
+                ret,
+                jid,
+                timeout,
+                **kwargs)
 
         # sreq = salt.payload.SREQ(
         #     #'tcp://{0[interface]}:{0[ret_port]}'.format(self.opts),
@@ -1458,7 +1502,7 @@ class SSHClient(object):
         opts = copy.deepcopy(self.opts)
         opts.update(kwargs)
         opts['timeout'] = timeout
-        arg = condition_kwarg(arg, kwarg)
+        arg = salt.utils.args.condition_input(arg, kwarg)
         opts['arg_str'] = '{0} {1}'.format(fun, ' '.join(arg))
         opts['selected_target_option'] = expr_form
         opts['tgt'] = tgt
@@ -1627,5 +1671,8 @@ class Caller(object):
         Call a single salt function
         '''
         func = self.sminion.functions[fun]
-        args, kwargs = salt.minion.parse_args_and_kwargs(func, args, kwargs)
+        args, kwargs = salt.minion.load_args_and_kwargs(
+            func,
+            salt.utils.args.parse_input(args),
+            kwargs)
         return func(*args, **kwargs)

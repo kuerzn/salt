@@ -15,7 +15,6 @@
 from __future__ import print_function
 import os
 import sys
-import getpass
 import logging
 import optparse
 import traceback
@@ -24,10 +23,11 @@ from functools import partial
 # Import salt libs
 import salt.config as config
 import salt.loader as loader
+import salt.log.setup as log
+import salt.syspaths as syspaths
 import salt.utils as utils
 import salt.version as version
-import salt.syspaths as syspaths
-import salt.log.setup as log
+import salt.utils.args
 from salt.utils.validate.path import is_writeable
 
 if not utils.is_windows():
@@ -405,7 +405,12 @@ class ConfigDirMixIn(object):
         if hasattr(self, 'setup_config'):
             if not hasattr(self, 'config'):
                 self.config = {}
-            self.config.update(self.setup_config())
+            try:
+                self.config.update(self.setup_config())
+            except (IOError, OSError) as exc:
+                self.error(
+                    'Failed to load configuration: {0}'.format(exc)
+                )
 
     def get_config_file_path(self, configfile=None):
         if configfile is None:
@@ -637,7 +642,7 @@ class LogLevelMixIn(object):
             # Since we're not be able to write to the log file or it's parent
             # directory(if the log file does not exit), are we the same user
             # as the one defined in the configuration file?
-            current_user = getpass.getuser()
+            current_user = salt.utils.get_user()
             if self.config['user'] != current_user:
                 # Yep, not the same user!
                 # Is the current user in ACL?
@@ -1544,6 +1549,12 @@ class SaltCMDOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
             help=('Display minions that timeout')
         )
         self.add_option(
+            '--show-jid',
+            default=False,
+            action='store_true',
+            help=('Displays jid without the additional output of --verbose')
+        )
+        self.add_option(
             '-b', '--batch',
             '--batch-size',
             default='',
@@ -1661,10 +1672,14 @@ class SaltCMDOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
                                 self.config['arg'][cmd_index].append(arg)
                         if len(self.config['fun']) != len(self.config['arg']):
                             self.exit(42, 'Cannot execute compound command without '
-                                          'defining all arguments.')
+                                          'defining all arguments.\n')
                 else:
                     self.config['fun'] = self.args[1]
                     self.config['arg'] = self.args[2:]
+
+                # parse the args and kwargs before sending to the publish interface
+                self.config['arg'] = \
+                    salt.utils.args.parse_input(self.config['arg'])
             except IndexError:
                 self.exit(42, '\nIncomplete options passed.\n\n')
 
@@ -1913,7 +1928,7 @@ class SaltKeyOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
         # Filter accepted list arguments as soon as possible
         if not self.options.list:
             return
-        if not self.options.list.startswith(('acc', 'pre', 'un', 'rej')):
+        if not self.options.list.startswith(('acc', 'pre', 'un', 'rej', 'all')):
             self.error(
                 '{0!r} is not a valid argument to \'--list\''.format(
                     self.options.list
@@ -2110,6 +2125,23 @@ class SaltRunOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
                   'runner.function to see documentation on only that runner '
                   'or function.')
         )
+        group = self.output_options_group = optparse.OptionGroup(
+            self, 'Output Options', 'Configure your preferred output format'
+        )
+        self.add_option_group(group)
+
+        group.add_option(
+            '--no-color', '--no-colour',
+            default=False,
+            action='store_true',
+            help='Disable all colored output'
+        )
+        group.add_option(
+            '--force-color', '--force-colour',
+            default=False,
+            action='store_true',
+            help='Force colored output'
+        )
 
     def _mixin_after_parsed(self):
         if len(self.args) > 0:
@@ -2150,16 +2182,13 @@ class SaltSSHOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
                   'raw shell command')
         )
         self.add_option(
-            '--priv',
-            dest='ssh_priv',
-            help=('Ssh private key file'))
-        self.add_option(
             '--roster',
             dest='roster',
             default='',
             help=('Define which roster system to use, this defines if a '
                   'database backend, scanner, or custom roster system is '
-                  'used. Default is the flat file roster.'))
+                  'used. Default is the flat file roster.')
+        )
         self.add_option(
             '--roster-file',
             dest='roster_file',
@@ -2167,7 +2196,8 @@ class SaltSSHOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
             help=('define an alternative location for the default roster '
                   'file location. The default roster file is called roster '
                   'and is found in the same directory as the master config '
-                  'file.'))
+                  'file.')
+        )
         self.add_option(
             '--refresh', '--refresh-cache',
             dest='refresh_cache',
@@ -2176,7 +2206,8 @@ class SaltSSHOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
             help=('Force a refresh of the master side data cache of the '
                   'target\'s data. This is needed if a target\'s grains have '
                   'been changed and the auto refresh timeframe has not been '
-                  'reached.'))
+                  'reached.')
+        )
         self.add_option(
             '--max-procs',
             dest='ssh_max_procs',
@@ -2185,35 +2216,50 @@ class SaltSSHOptionParser(OptionParser, ConfigDirMixIn, MergeConfigMixIn,
             help='Set the number of concurrent minions to communicate with. '
                  'This value defines how many processes are opened up at a '
                  'time to manage connections, the more running processes the '
-                 'faster communication should be, default is %default')
-        self.add_option(
-            '-i',
-            '--ignore-host-keys',
-            dest='ignore_host_keys',
-            default=False,
-            action='store_true',
-            help='By default ssh host keys are honored and connections will '
-                 'ask for approval')
+                 'faster communication should be, default is %default'
+        )
         self.add_option(
             '-v', '--verbose',
             default=False,
             action='store_true',
             help=('Turn on command verbosity, display jid')
         )
-        self.add_option(
+
+        auth_group = optparse.OptionGroup(
+            self, 'Authentication Options',
+            'Parameters affecting authentication'
+        )
+        auth_group.add_option(
+            '--priv',
+            dest='ssh_priv',
+            help='Ssh private key file'
+        )
+        auth_group.add_option(
+            '-i',
+            '--ignore-host-keys',
+            dest='ignore_host_keys',
+            default=False,
+            action='store_true',
+            help='By default ssh host keys are honored and connections will '
+                 'ask for approval'
+        )
+        auth_group.add_option(
             '--passwd',
             dest='ssh_passwd',
             default='',
             help='Set the default password to attempt to use when '
-                 'authenticating')
-        self.add_option(
+                 'authenticating'
+        )
+        auth_group.add_option(
             '--key-deploy',
             dest='ssh_key_deploy',
             default=False,
             action='store_true',
             help='Set this flag to atempt to deploy the authorized ssh key '
                  'with all minions. This combined with --passwd can make '
-                 'initial deployment of keys very fast and easy')
+                 'initial deployment of keys very fast and easy'
+        )
+        self.add_option_group(auth_group)
 
     def _mixin_after_parsed(self):
         if not self.args:

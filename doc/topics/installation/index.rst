@@ -5,37 +5,14 @@ Installation
 ============
 .. seealso::
 
-    :doc:`Installing Salt for development </topics/hacking>` and contributing
-    to the project.
+    :doc:`Installing Salt for development </topics/development/hacking>` and
+    contributing to the project.
 
 Quick Install
 -------------
 
-Many popular distributions will be able to install the salt minion by executing
-the bootstrap script:
-
-.. code-block:: bash
-
-    wget -O - http://bootstrap.saltstack.org | sudo sh
-
-Run the following script to install just the Salt Master:
-
-.. code-block:: bash
-
-    curl -L http://bootstrap.saltstack.org | sudo sh -s -- -M -N
-
-The script should also make it simple to install a salt master, if desired.
-
-Currently the install script has been tested to work on:
-
-* Ubuntu 10.x/11.x/12.x
-* Debian 6.x
-* CentOS 6.3
-* Fedora
-* Arch
-* FreeBSD 9.0
-
-See `Salt Bootstrap`_ for more information.
+On most distributions, you can set up a **Salt Minion** with the
+`Salt Bootstrap`_.
 
 .. _`Salt Bootstrap`: https://github.com/saltstack/salt-bootstrap
 
@@ -95,3 +72,16 @@ Optional Dependencies
 .. _`MarkupSafe`: https://pypi.python.org/pypi/MarkupSafe
 .. _`mako`: http://www.makotemplates.org/
 .. _`Cython`: http://cython.org/
+.. _`apache-libcloud`: http://libcloud.apache.org
+
+
+Upgrading Salt
+--------------
+
+When upgrading Salt, the master(s) should always be upgraded first.  Backwards
+compatibility for minions running newer versions of salt than their masters is
+not guaranteed.
+
+Whenever possible, backwards compatibility between new masters
+and old minions will be preserved.  Generally, the only exception to this
+policy is in case of a security vulnerability.

@@ -16,6 +16,7 @@ import yaml
 
 # Import salt libs
 import salt.utils
+from salt._compat import string_types
 
 log = logging.getLogger(__name__)
 __SUFFIX_NOT_NEEDED = ('x86_64', 'noarch')
@@ -144,9 +145,10 @@ def _repack_pkgs(pkgs):
     Repack packages specified using "pkgs" argument to pkg states into a single
     dictionary
     '''
+    _normalize_name = __salt__.get('pkg.normalize_name', lambda pkgname: pkgname)
     return dict(
         [
-            (str(x), str(y) if y is not None else y)
+            (_normalize_name(str(x)), str(y) if y is not None else y)
             for x, y in salt.utils.repack_dictlist(pkgs).iteritems()
         ]
     )
@@ -166,7 +168,8 @@ def pack_sources(sources):
 
         salt '*' pkg_resource.pack_sources '[{"foo": "salt://foo.rpm"}, {"bar": "salt://bar.rpm"}]'
     '''
-    if isinstance(sources, basestring):
+    _normalize_name = __salt__.get('pkg.normalize_name', lambda pkgname: pkgname)
+    if isinstance(sources, string_types):
         try:
             sources = yaml.safe_load(sources)
         except yaml.parser.ParserError as err:
@@ -179,7 +182,8 @@ def pack_sources(sources):
             log.error('Input must be a list of 1-element dicts')
             return {}
         else:
-            ret.update(source)
+            key = next(iter(source))
+            ret[_normalize_name(key)] = source[key]
     return ret
 
 
@@ -284,7 +288,10 @@ def parse_targets(name=None,
         return [x[2] for x in srcinfo], 'file'
 
     elif name:
-        return dict([(x, None) for x in name.split(',')]), 'repository'
+        _normalize_name = \
+            __salt__.get('pkg.normalize_name', lambda pkgname: pkgname)
+        packed = dict([(_normalize_name(x), None) for x in name.split(',')])
+        return packed, 'repository'
 
     else:
         log.error('No package sources passed to pkg.install.')

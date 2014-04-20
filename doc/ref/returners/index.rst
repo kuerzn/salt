@@ -9,6 +9,9 @@ data.
 By using a Salt returner, results data can be redirected to external data-stores
 for analysis and archival.
 
+Returners pull their configuration values from the Salt minions. Returners are only
+configured once, which is generally at load time.
+
 The returner interface allows the return data to be sent to any system that
 can receive data. This means that return data can be sent to a Redis server,
 a MongoDB server, a MySQL server, or any system.
@@ -100,9 +103,17 @@ loaded as simply ``redis``:
     except ImportError:
         HAS_REDIS = False
 
+    __virtualname__ = 'redis'
+
     def __virtual__():
         if not HAS_REDIS:
             return False
-        return 'redis'
+        return __virtualname__
+
+Full List of Returners
+======================
+
+.. toctree::
+    all/index
 
 .. _`redis`: https://github.com/saltstack/salt/tree/develop/salt/returners/redis_return.py

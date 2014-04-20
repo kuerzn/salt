@@ -5,23 +5,22 @@ Routines to set up a minion
 
 # Import python libs
 from __future__ import print_function
-import logging
-import getpass
-import multiprocessing
-import fnmatch
 import copy
-import os
+import errno
+import fnmatch
 import hashlib
+import logging
+import multiprocessing
+import os
 import re
-import types
+import salt
+import signal
+import sys
 import threading
 import time
 import traceback
-import sys
-import signal
-import errno
+import types
 from random import randint, shuffle
-import salt
 
 # Import third party libs
 try:
@@ -30,7 +29,6 @@ try:
 except ImportError:
     # Running in local, zmq not needed
     HAS_ZMQ = False
-import yaml
 
 HAS_RANGE = False
 try:
@@ -56,15 +54,17 @@ except ImportError:
 # Import salt libs
 from salt.exceptions import (
     AuthenticationError, CommandExecutionError, CommandNotFoundError,
-    SaltInvocationError, SaltReqTimeoutError, SaltClientError, SaltSystemExit
+    SaltInvocationError, SaltReqTimeoutError, SaltClientError,
+    SaltSystemExit
 )
 import salt.client
 import salt.crypt
 import salt.loader
-import salt.utils
 import salt.payload
-import salt.utils.schedule
+import salt.utils
+import salt.utils.args
 import salt.utils.event
+import salt.utils.schedule
 
 from salt._compat import string_types
 from salt.utils.debug import enable_sigusr1_handler
@@ -125,6 +125,11 @@ def resolve_dns(opts):
     else:
         ret['master_ip'] = '127.0.0.1'
 
+    if 'master_ip' in ret and 'master_ip' in opts:
+        if ret['master_ip'] != opts['master_ip']:
+            log.warning('Master ip address changed from {0} to {1}'.format(opts['master_ip'],
+                                                                          ret['master_ip'])
+            )
     ret['master_uri'] = 'tcp://{ip}:{port}'.format(ip=ret['master_ip'],
                                                    port=opts['master_port'])
     return ret
@@ -144,101 +149,82 @@ def get_proc_dir(cachedir):
 
 def parse_args_and_kwargs(func, args, data=None):
     '''
-    Detect the args and kwargs that need to be passed to a function call,
-    and yamlify all arguments and key-word argument values if:
-    - they are strings
-    - they do not contain '\n'
-    If yamlify results in a dict, and the original argument or kwarg value
-    did not start with a "{", then keep the original string value.
-    This is to prevent things like 'echo "Hello: world"' to be parsed as
-    dictionaries.
+    Wrap load_args_and_kwargs
+    '''
+    salt.utils.warn_until(
+        'Boron',
+        'salt.minion.parse_args_and_kwargs() has been renamed to '
+        'salt.minion.load_args_and_kwargs(). Please change this function call '
+        'before the Boron release of Salt.'
+    )
+    return load_args_and_kwargs(func, args, data=data)
+
+
+def load_args_and_kwargs(func, args, data=None):
+    '''
+    Detect the args and kwargs that need to be passed to a function call, and
+    check them against what was passed.
     '''
     argspec = salt.utils.get_function_argspec(func)
     _args = []
-    kwargs = {}
+    _kwargs = {}
     invalid_kwargs = []
 
     for arg in args:
-        # support old yamlify syntax
         if isinstance(arg, string_types):
-            salt.utils.warn_until(
-                'Boron',
-                'This minion received a job where kwargs were passed as '
-                'string\'d args, which has been deprecated. This functionality will '
-                'be removed in Salt Boron.'
-            )
-            arg_name, arg_value = salt.utils.parse_kwarg(arg)
-            if arg_name:
-                if argspec.keywords or arg_name in argspec.args:
+            string_arg, string_kwarg = salt.utils.args.parse_input([arg], condition=False)  # pylint: disable=W0632
+            if string_arg:
+                # Don't append the version that was just derived from parse_cli
+                # above, that would result in a 2nd call to
+                # salt.utils.cli.yamlify_arg(), which could mangle the input.
+                _args.append(arg)
+            elif string_kwarg:
+                salt.utils.warn_until(
+                    'Boron',
+                    'The list of function args and kwargs should be parsed '
+                    'by salt.utils.args.parse_input() before calling '
+                    'salt.minion.load_args_and_kwargs().'
+                )
+                if argspec.keywords or string_kwarg.keys()[0] in argspec.args:
                     # Function supports **kwargs or is a positional argument to
                     # the function.
-                    kwargs[arg_name] = yamlify_arg(arg_value)
-                    continue
-
-                # **kwargs not in argspec and parsed argument name not in
-                # list of positional arguments. This keyword argument is
-                # invalid.
-                invalid_kwargs.append(arg)
+                    _kwargs.update(string_kwarg)
+                else:
+                    # **kwargs not in argspec and parsed argument name not in
+                    # list of positional arguments. This keyword argument is
+                    # invalid.
+                    invalid_kwargs.append('{0}'.format(arg))
+                continue
 
         # if the arg is a dict with __kwarg__ == True, then its a kwarg
-        elif isinstance(arg, dict) and arg.get('__kwarg__') is True:
+        elif isinstance(arg, dict) and arg.pop('__kwarg__', False) is True:
             for key, val in arg.iteritems():
-                if key == '__kwarg__':
-                    continue
-                kwargs[key] = val
+                if argspec.keywords or key in argspec.args:
+                    # Function supports **kwargs or is a positional argument to
+                    # the function.
+                    _kwargs[key] = val
+                else:
+                    # **kwargs not in argspec and parsed argument name not in
+                    # list of positional arguments. This keyword argument is
+                    # invalid.
+                    invalid_kwargs.append('{0}'.format(arg))
             continue
-        _args.append(yamlify_arg(arg))
-    if argspec.keywords and isinstance(data, dict):
-        # this function accepts **kwargs, pack in the publish data
-        for key, val in data.items():
-            kwargs['__pub_{0}'.format(key)] = val
+
+        else:
+            _args.append(arg)
 
     if invalid_kwargs:
         raise SaltInvocationError(
             'The following keyword arguments are not valid: {0}'
             .format(', '.join(invalid_kwargs))
         )
-    return _args, kwargs
 
+    if argspec.keywords and isinstance(data, dict):
+        # this function accepts **kwargs, pack in the publish data
+        for key, val in data.items():
+            _kwargs['__pub_{0}'.format(key)] = val
 
-def yamlify_arg(arg):
-    '''
-    yaml.safe_load the arg unless it has a newline in it.
-    '''
-    if not isinstance(arg, string_types):
-        return arg
-    try:
-        original_arg = str(arg)
-        if isinstance(arg, string_types):
-            if '#' in arg:
-                # Don't yamlify this argument or the '#' and everything after
-                # it will be interpreted as a comment.
-                return arg
-            if '\n' not in arg:
-                arg = yaml.safe_load(arg)
-        if isinstance(arg, dict):
-            # dicts must be wrapped in curly braces
-            if (isinstance(original_arg, string_types) and
-                    not original_arg.startswith('{')):
-                return original_arg
-            else:
-                return arg
-        elif isinstance(arg, (int, list, string_types)):
-            # yaml.safe_load will load '|' as '', don't let it do that.
-            if arg == '' and original_arg in ('|',):
-                return original_arg
-            # yaml.safe_load will treat '#' as a comment, so a value of '#'
-            # will become None. Keep this value from being stomped as well.
-            elif arg is None and original_arg.strip().startswith('#'):
-                return original_arg
-            else:
-                return arg
-        else:
-            # we don't support this type
-            return original_arg
-    except Exception:
-        # In case anything goes wrong...
-        return original_arg
+    return _args, _kwargs
 
 
 class SMinion(object):
@@ -310,8 +296,10 @@ class MinionBase(object):
         # Start with the publish socket
         self._init_context_and_poller()
 
-        id_hash = hashlib.md5(self.opts['id']).hexdigest()
-
+        hash_type = getattr(hashlib, self.opts.get('hash_type', 'md5'))
+        id_hash = hash_type(self.opts['id']).hexdigest()
+        if self.opts.get('hash_type', 'md5') == 'sha256':
+            id_hash = id_hash[:10]
         epub_sock_path = os.path.join(
             self.opts['sock_dir'],
             'minion_event_{0}_pub.ipc'.format(id_hash)
@@ -620,7 +608,8 @@ class Minion(MinionBase):
                     proxyminion.start(self.opts['pillar']['proxy'][p])
                     self.clean_die(signal.SIGTERM, None)
         else:
-            log.debug('I am {0} and I am not supposed to start any proxies.'.format(self.opts['id']))
+            log.debug('I am {0} and I am not supposed to start any proxies. '
+                      '(Likely not a problem)'.format(self.opts['id']))
 
     def _prep_mod_opts(self):
         '''
@@ -667,7 +656,7 @@ class Minion(MinionBase):
 
     def _fire_master(self, data=None, tag=None, events=None, pretag=None):
         '''
-        Fire an event on the master
+        Fire an event on the master, or drop message if unable to send.
         '''
         load = {'id': self.opts['id'],
                 'cmd': '_minion_event',
@@ -682,9 +671,16 @@ class Minion(MinionBase):
             return
         sreq = salt.payload.SREQ(self.opts['master_uri'])
         try:
-            sreq.send('aes', self.crypticle.dumps(load))
+            result = sreq.send('aes', self.crypticle.dumps(load))
+            try:
+                data = self.crypticle.loads(result)
+            except AuthenticationError:
+                log.info("AES key changed, re-authenticating")
+                # We can't decode the master's response to our event,
+                # so we will need to re-authenticate.
+                self.authenticate()
         except Exception:
-            pass
+            log.info("fire_master failed: {0}".format(traceback.format_exc()))
 
     def _handle_payload(self, payload):
         '''
@@ -803,6 +799,8 @@ class Minion(MinionBase):
                 name=data['jid']
             )
         process.start()
+        if not sys.platform.startswith('win'):
+            process.join()
 
     @classmethod
     def _thread_return(cls, minion_instance, opts, data):
@@ -819,6 +817,7 @@ class Minion(MinionBase):
             salt.utils.daemonize_if(opts)
         sdata = {'pid': os.getpid()}
         sdata.update(data)
+        log.info('Starting a new job with PID {0}'.format(sdata['pid']))
         with salt.utils.fopen(fn_, 'w+b') as fp_:
             fp_.write(minion_instance.serial.dumps(sdata))
         ret = {'success': False}
@@ -826,7 +825,10 @@ class Minion(MinionBase):
         if function_name in minion_instance.functions:
             try:
                 func = minion_instance.functions[data['fun']]
-                args, kwargs = parse_args_and_kwargs(func, data['arg'], data)
+                args, kwargs = load_args_and_kwargs(
+                    func,
+                    data['arg'],
+                    data)
                 sys.modules[func.__module__].__context__['retcode'] = 0
                 return_data = func(*args, **kwargs)
                 if isinstance(return_data, types.GeneratorType):
@@ -857,6 +859,7 @@ class Minion(MinionBase):
                 )
                 log.debug(msg, exc_info=True)
                 ret['return'] = '{0}: {1}'.format(msg, exc)
+                ret['out'] = 'nested'
             except CommandExecutionError as exc:
                 log.error(
                     'A command in {0!r} had a problem: {1}'.format(
@@ -866,6 +869,7 @@ class Minion(MinionBase):
                     exc_info=log.isEnabledFor(logging.DEBUG)
                 )
                 ret['return'] = 'ERROR: {0}'.format(exc)
+                ret['out'] = 'nested'
             except SaltInvocationError as exc:
                 log.error(
                     'Problem executing {0!r}: {1}'.format(
@@ -877,6 +881,7 @@ class Minion(MinionBase):
                 ret['return'] = 'ERROR executing {0!r}: {1}'.format(
                     function_name, exc
                 )
+                ret['out'] = 'nested'
             except TypeError as exc:
                 trb = traceback.format_exc()
                 aspec = salt.utils.get_function_argspec(
@@ -889,12 +894,15 @@ class Minion(MinionBase):
                                                        aspec)
                 log.warning(msg, exc_info=log.isEnabledFor(logging.DEBUG))
                 ret['return'] = msg
+                ret['out'] = 'nested'
             except Exception:
                 msg = 'The minion function caused an exception'
                 log.warning(msg, exc_info=log.isEnabledFor(logging.DEBUG))
                 ret['return'] = '{0}: {1}'.format(msg, traceback.format_exc())
+                ret['out'] = 'nested'
         else:
             ret['return'] = '{0!r} is not available.'.format(function_name)
+            ret['out'] = 'nested'
 
         ret['jid'] = data['jid']
         ret['fun'] = data['fun']
@@ -933,7 +941,10 @@ class Minion(MinionBase):
             ret['success'][data['fun'][ind]] = False
             try:
                 func = minion_instance.functions[data['fun'][ind]]
-                args, kwargs = parse_args_and_kwargs(func, data['arg'][ind], data)
+                args, kwargs = load_args_and_kwargs(
+                    func,
+                    data['arg'][ind],
+                    data)
                 ret['return'][data['fun'][ind]] = func(*args, **kwargs)
                 ret['success'][data['fun'][ind]] = True
             except Exception as exc:
@@ -995,13 +1006,32 @@ class Minion(MinionBase):
                     'id': self.opts['id']}
             for key, value in ret.items():
                 load[key] = value
-        try:
-            oput = self.functions[fun].__outputter__
-        except (KeyError, AttributeError, TypeError):
-            pass
+
+        if 'out' in ret:
+            if isinstance(ret['out'], string_types):
+                load['out'] = ret['out']
+            else:
+                log.error('Invalid outputter {0}. This is likely a bug.'
+                          .format(ret['out']))
         else:
-            if isinstance(oput, string_types):
-                load['out'] = oput
+            try:
+                oput = self.functions[fun].__outputter__
+            except (KeyError, AttributeError, TypeError):
+                pass
+            else:
+                if isinstance(oput, string_types):
+                    load['out'] = oput
+        if self.opts['cache_jobs']:
+            # Local job cache has been enabled
+            fn_ = os.path.join(
+                self.opts['cachedir'],
+                'minion_jobs',
+                load['jid'],
+                'return.p')
+            jdir = os.path.dirname(fn_)
+            if not os.path.isdir(jdir):
+                os.makedirs(jdir)
+            salt.utils.fopen(fn_, 'w+b').write(self.serial.dumps(ret))
         try:
             ret_val = sreq.send('aes', self.crypticle.dumps(load))
         except SaltReqTimeoutError:
@@ -1015,17 +1045,7 @@ class Minion(MinionBase):
             # The master AES key has changed, reauth
             self.authenticate()
             ret_val = sreq.send('aes', self.crypticle.dumps(load))
-        if self.opts['cache_jobs']:
-            # Local job cache has been enabled
-            fn_ = os.path.join(
-                self.opts['cachedir'],
-                'minion_jobs',
-                load['jid'],
-                'return.p')
-            jdir = os.path.dirname(fn_)
-            if not os.path.isdir(jdir):
-                os.makedirs(jdir)
-            salt.utils.fopen(fn_, 'w+b').write(self.serial.dumps(ret))
+        log.trace('ret_val = {0}'.format(ret_val))
         return ret_val
 
     def _state_run(self):
@@ -1167,12 +1187,17 @@ class Minion(MinionBase):
                 log.info('Authentication with master successful!')
                 break
             log.info('Waiting for minion key to be accepted by the master.')
-            time.sleep(acceptance_wait_time)
+            if acceptance_wait_time:
+                log.info('Waiting {0} seconds before retry.'.format(acceptance_wait_time))
+                time.sleep(acceptance_wait_time)
             if acceptance_wait_time < acceptance_wait_time_max:
                 acceptance_wait_time += acceptance_wait_time
                 log.debug('Authentication wait time is {0}'.format(acceptance_wait_time))
         self.aes = creds['aes']
-        self.publish_port = creds['publish_port']
+        if self.opts.get('syndic_master_publish_port'):
+            self.publish_port = self.opts.get('syndic_master_publish_port')
+        else:
+            self.publish_port = creds['publish_port']
         self.crypticle = salt.crypt.Crypticle(self.opts, self.aes)
 
     def module_refresh(self):
@@ -1195,6 +1220,20 @@ class Minion(MinionBase):
         ).compile_pillar()
         self.module_refresh()
 
+    def environ_setenv(self, package):
+        '''
+        Set the salt-minion main process environment according to
+        the data contained in the minion event data
+        '''
+        tag, data = salt.utils.event.MinionEvent.unpack(package)
+        environ = data.get('environ', None)
+        if environ is None:
+            return False
+        false_unsets = data.get('false_unsets', False)
+        clear_all = data.get('clear_all', False)
+        import salt.modules.environ as mod_environ
+        return mod_environ.setenv(environ, false_unsets, clear_all)
+
     def clean_die(self, signum, frame):
         '''
         Python does not handle the SIGTERM cleanly, if it is signaled exit
@@ -1203,11 +1242,10 @@ class Minion(MinionBase):
         self._running = False
         exit(0)
 
-    # Main Minion Tune In
-    def tune_in(self):
+    def _pre_tune(self):
         '''
-        Lock onto the publisher. This is the main event loop for the minion
-        :rtype : None
+        Set the minion running flag and issue the appropriate warnings if
+        the minion cannot be started or is already running
         '''
         if self._running is None:
             self._running = True
@@ -1228,7 +1266,7 @@ class Minion(MinionBase):
             log.info(
                 '{0} is starting as user \'{1}\''.format(
                     self.__class__.__name__,
-                    getpass.getuser()
+                    salt.utils.get_user()
                 )
             )
         except Exception as err:
@@ -1241,6 +1279,14 @@ class Minion(MinionBase):
                 ),
                 exc_info=err
             )
+
+    # Main Minion Tune In
+    def tune_in(self):
+        '''
+        Lock onto the publisher. This is the main event loop for the minion
+        :rtype : None
+        '''
+        self._pre_tune()
 
         # Properly exit if a SIGTERM is signalled
         signal.signal(signal.SIGTERM, self.clean_die)
@@ -1313,6 +1359,8 @@ class Minion(MinionBase):
                             if self.grains_cache != self.opts['grains']:
                                 self.pillar_refresh()
                                 self.grains_cache = self.opts['grains']
+                        elif package.startswith('environ_setenv'):
+                            self.environ_setenv(package)
                         elif package.startswith('fire_master'):
                             tag, data = salt.utils.event.MinionEvent.unpack(package)
                             log.debug('Forwarding master event tag={tag}'.format(tag=data['tag']))
@@ -1346,6 +1394,8 @@ class Minion(MinionBase):
         management of the event bus assuming that these are handled outside
         the tune_in sequence
         '''
+
+        self._pre_tune()
         self._init_context_and_poller()
 
         self.socket = self.context.socket(zmq.SUB)
@@ -1390,7 +1440,7 @@ class Minion(MinionBase):
         Tear down the minion
         '''
         self._running = False
-        if hasattr(self, 'poller'):
+        if getattr(self, 'poller', None) is not None:
             if isinstance(self.poller.sockets, dict):
                 for socket in self.poller.sockets.keys():
                     if socket.closed is False:
@@ -1487,7 +1537,7 @@ class Syndic(Minion):
         Lock onto the publisher. This is the main event loop for the syndic
         '''
         # Instantiate the local client
-        self.local = salt.client.LocalClient(self.opts['_minion_conf_file'])
+        self.local = salt.client.get_local_client(self.opts['_minion_conf_file'])
         self.local.event.subscribe('')
         self.local.opts['interface'] = self._syndic_interface
 
@@ -1640,9 +1690,8 @@ class Syndic(Minion):
         Tear down the syndic minion
         '''
         # We borrowed the local clients poller so give it back before
-        # it's destroyed.
-        # This does not delete the poller just our reference to it.
-        del self.poller
+        # it's destroyed. Reset the local poller reference.
+        self.poller = None
         super(Syndic, self).destroy()
         if hasattr(self, 'local'):
             del self.local
@@ -1849,7 +1898,7 @@ class Matcher(object):
             elif match in opers:
                 # We didn't match a target, so append a boolean operator or
                 # subexpression
-                if results:
+                if results or match in ['(', ')']:
                     if match == 'not':
                         if results[-1] == 'and':
                             pass
@@ -1869,7 +1918,7 @@ class Matcher(object):
         try:
             return eval(results)
         except Exception:
-            log.error('Invalid compound target: {0}'.format(tgt))
+            log.error('Invalid compound target: {0} for results: {1}'.format(tgt, results))
             return False
         return False
 

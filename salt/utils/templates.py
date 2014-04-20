@@ -29,6 +29,7 @@ from salt.utils.jinja import ensure_sequence_filter
 from salt.utils.jinja import SaltCacheLoader as JinjaSaltCacheLoader
 from salt.utils.jinja import SerializerExtension as JinjaSerializerExtension
 from salt import __path__ as saltpath
+from salt._compat import string_types
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ def wrap_tmpl_func(render_str):
         assert 'opts' in context
         assert 'saltenv' in context
 
-        if isinstance(tmplsrc, basestring):
+        if isinstance(tmplsrc, string_types):
             if from_str:
                 tmplstr = tmplsrc
             else:
@@ -268,7 +269,7 @@ def render_jinja_tmpl(tmplstr, context, tmplpath=None):
 
     unicode_context = {}
     for key, value in context.iteritems():
-        if not isinstance(value, basestring):
+        if not isinstance(value, string_types):
             unicode_context[key] = value
             continue
 
