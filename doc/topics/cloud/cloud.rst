@@ -172,7 +172,7 @@ required by the developer. When this is the case, some or all of the functions
 in ``libcloudfuncs`` may be replaced. If they are all replaced, the libcloud
 imports should be absent from the Salt Cloud module.
 
-A good example of a non-libcloud provider is the Digital Ocean module:
+A good example of a non-libcloud provider is the DigitalOcean module:
 
 https://github.com/saltstack/salt/tree/develop/salt/cloud/clouds/digital_ocean.py
 
@@ -187,7 +187,7 @@ This function is only necessary for libcloud-based modules, and does not need
 to exist otherwise.
 
 The get_image() Function
--------------------------
+------------------------
 This function is only necessary for libcloud-based modules, and does not need
 to exist otherwise.
 
@@ -234,7 +234,7 @@ excellent example is in the Azure driver.
 
 The destroy() Function
 ----------------------
-This function irreversably destroys a virtual machine on the cloud provider.
+This function irreversibly destroys a virtual machine on the cloud provider.
 Before doing so, it should fire an event on the Salt event bus. The tag for this
 event is ``salt/cloud/<vm name>/destroying``. Once the virtual machine has been
 destroyed, another event is fired. The tag for that event is

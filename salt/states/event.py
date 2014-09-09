@@ -1,7 +1,23 @@
 # -*- coding: utf-8 -*-
-def fire_master(name, data):
+'''
+Send events through Salt's event system during state runs
+'''
+
+
+def send(name,
+        data=None,
+        preload=None,
+        with_env=False,
+        with_grains=False,
+        with_pillar=False,
+        **kwargs):
     '''
-    Fire an event on the Salt master event bus
+    Send an event to the Salt Master
+
+    .. versionadded:: 2014.7.0
+
+    Accepts the same arguments as the :py:func:`event.send
+    <salt.modules.event.send>` execution module of the same name.
 
     Example:
 
@@ -10,19 +26,37 @@ def fire_master(name, data):
         # ...snip bunch of states above
 
         mycompany/mystaterun/status/update:
-          event:
-            - fire_master
+          event.send:
             - data:
                 status: "Half-way through the state run!"
 
         # ...snip bunch of states below
     '''
+    ret = {'name': name, 'changes': {}, 'result': False, 'comment': ''}
+    ret['changes'] = {'tag': name, 'data': data}
+
+    if __opts__['test']:
+        ret['result'] = None
+        ret['comment'] = 'Event would have been fired'
+        return ret
+
+    ret['result'] = __salt__['event.send'](name,
+            data=data,
+            preload=preload,
+            with_env=with_env,
+            with_grains=with_grains,
+            with_pillar=with_pillar,
+            **kwargs)
+    ret['comment'] = 'Event fired'
+
+    return ret
 
 
 def wait(name, sfun=None):
     '''
     Fire an event on the Salt master event bus if called from a watch statement
-    and the watched state is successful and has changes
+
+    .. versionadded:: 2014.7.0
 
     Example:
 
@@ -44,29 +78,13 @@ def wait(name, sfun=None):
             - wait
             - name: mycompany/loadbalancer/pool/update
             - data:
-                ??? # Bad example here. What makes more sense?
+                new_web_server_ip: {{ grains['ipv4'] | first() }}
             - watch:
-              - service: apache
+              - pkg: apache
     '''
+    # Noop. The state system will call the mod_watch function instead.
+    return {'name': name, 'changes': {}, 'result': True, 'comment': ''}
 
 
-def mod_watch(name, sfun=None):
-    '''
-    Fire an event on the Salt master event bus if called from a watch statement
-
-    Changes from the watched state can be included in the event.
-
-    '''
-
-# TODO: how to pull the watched state ID so we can look up the result of that
-# state in the running dict.
-#
-# __running__ = {
-#     'grains_|-add_role_|-roles_|-list_present': {
-#         'comment': 'Append value web9 to grain roles',
-#         '__run_num__': 0,
-#         'changes': True,
-#         'name': 'roles',
-#         'result': True
-#     }
-# }
+mod_watch = send
+fire_master = send

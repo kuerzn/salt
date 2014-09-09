@@ -50,7 +50,7 @@ def set_pidfile(pidfile, user):
                 user
             )
         )
-        sys.exit(2)
+        sys.exit(os.EX_NOUSER)
 
     if os.getuid() == uid:
         # The current user already owns the pidfile. Return!
@@ -89,7 +89,7 @@ def clean_proc(proc, wait_for_kill=10):
                         proc.pid
                     )
                 )
-                os.kill(signal.SIGKILL, proc.pid)
+                os.kill(proc.pid, signal.SIGKILL)
     except (AssertionError, AttributeError):
         # Catch AssertionError when the proc is evaluated inside the child
         # Catch AttributeError when the process dies between proc.is_alive()

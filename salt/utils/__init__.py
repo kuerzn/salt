@@ -3,6 +3,7 @@
 Some of the utils used by salt
 '''
 from __future__ import absolute_import
+from __future__ import print_function
 
 # joh 
 import io
@@ -13,6 +14,7 @@ import copy
 import collections
 import datetime
 import distutils.version  # pylint: disable=E0611
+import errno
 import fnmatch
 import hashlib
 import imp
@@ -36,6 +38,7 @@ import types
 import warnings
 import yaml
 from calendar import month_abbr as months
+from string import maketrans
 
 # Try to load pwd, fallback to getpass if unsuccessful
 try:
@@ -90,16 +93,24 @@ except ImportError:
     # pwd is not available on windows
     HAS_PWD = False
 
+try:
+    import setproctitle
+    HAS_SETPROCTITLE = True
+except ImportError:
+    HAS_SETPROCTITLE = False
+
 # Import salt libs
+from salt.defaults import DEFAULT_TARGET_DELIM
 import salt._compat
 import salt.log
-import salt.minion
 import salt.payload
 import salt.version
 from salt._compat import string_types
 from salt.utils.decorators import memoize as real_memoize
 from salt.exceptions import (
-    SaltClientError, CommandNotFoundError, SaltSystemExit, SaltInvocationError
+    CommandExecutionError, SaltClientError,
+    CommandNotFoundError, SaltSystemExit,
+    SaltInvocationError
 )
 
 
@@ -126,6 +137,7 @@ RED_BOLD = '\033[01;31m'
 ENDC = '\033[0m'
 
 log = logging.getLogger(__name__)
+_empty = object()
 
 
 def get_function_argspec(func):
@@ -266,12 +278,12 @@ def daemonize(redirect_out=True):
         pid = os.fork()
         if pid > 0:
             # exit first parent
-            sys.exit(0)
+            sys.exit(os.EX_OK)
     except OSError as exc:
         log.error(
             'fork #1 failed: {0} ({1})'.format(exc.errno, exc.strerror)
         )
-        sys.exit(1)
+        sys.exit(salt.exitcodes.EX_GENERIC)
 
     # decouple from parent environment
     os.chdir('/')
@@ -283,14 +295,14 @@ def daemonize(redirect_out=True):
     try:
         pid = os.fork()
         if pid > 0:
-            sys.exit(0)
+            sys.exit(os.EX_OK)
     except OSError as exc:
         log.error(
             'fork #2 failed: {0} ({1})'.format(
                 exc.errno, exc.strerror
             )
         )
-        sys.exit(1)
+        sys.exit(salt.exitcodes.EX_GENERIC)
 
     # A normal daemonization redirects the process output to /dev/null.
     # Unfortunately when a python multiprocess is called the output is
@@ -392,7 +404,7 @@ def which(exe=None):
                 # Allows both 'cmd' and 'cmd.exe' to be matched.
                 for ext in ext_list:
                     # Windows filesystem is case insensitive so we
-                    # safely rely on that behaviour
+                    # safely rely on that behavior
                     if os.access(full_path + ext, os.X_OK):
                         return full_path + ext
         log.trace(
@@ -480,8 +492,10 @@ def gen_mac(prefix='AC:DE:48'):
      - https://www.wireshark.org/tools/oui-lookup.html
      - https://en.wikipedia.org/wiki/MAC_address
     '''
-    r = random.randint
-    return '%s:%02X:%02X:%02X' % (prefix, r(0, 0xff), r(0, 0xff), r(0, 0xff))
+    return '{0}:{1:02X}:{2:02X}:{3:02X}'.format(prefix,
+                                                random.randint(0, 0xff),
+                                                random.randint(0, 0xff),
+                                                random.randint(0, 0xff))
 
 
 def ip_bracket(addr):
@@ -576,6 +590,12 @@ def prep_jid(cachedir, sum_type, user='root', nocache=False):
     '''
     Return a job id and prepare the job id directory
     '''
+    salt.utils.warn_until(
+                    'Boron',
+                    'All job_cache management has been moved into the local_cache '
+                    'returner, this util function will be removed-- please use '
+                    'the returner'
+                )
     jid = gen_jid()
 
     jid_dir_ = jid_dir(jid, cachedir, sum_type)
@@ -599,6 +619,12 @@ def jid_dir(jid, cachedir, sum_type):
     '''
     Return the jid_dir for the given job id
     '''
+    salt.utils.warn_until(
+                    'Boron',
+                    'All job_cache management has been moved into the local_cache '
+                    'returner, this util function will be removed-- please use '
+                    'the returner'
+                )
     jid = str(jid)
     jhash = getattr(hashlib, sum_type)(jid).hexdigest()
     return os.path.join(cachedir, 'jobs', jhash[:2], jhash[2:])
@@ -608,6 +634,11 @@ def jid_load(jid, cachedir, sum_type, serial='msgpack'):
     '''
     Return the load data for a given job id
     '''
+    salt.utils.warn_until(
+                    'Boron',
+                    'Getting the load has been moved into the returner interface '
+                    'please get the data from the master_job_cache '
+                )
     _dir = jid_dir(jid, cachedir, sum_type)
     load_fn = os.path.join(_dir, '.load.p')
     if not os.path.isfile(load_fn):
@@ -784,7 +815,9 @@ def build_whitespace_split_regex(text):
     Create a regular expression at runtime which should match ignoring the
     addition or deletion of white space or line breaks, unless between commas
 
-    Example::
+    Example:
+
+    .. code-block:: yaml
 
     >>> import re
     >>> from salt.utils import *
@@ -1192,7 +1225,10 @@ def check_whitelist_blacklist(value, whitelist=None, blacklist=None):
     return ret
 
 
-def subdict_match(data, expr, delim=':', regex_match=False):
+def subdict_match(data,
+                  expr,
+                  delimiter=DEFAULT_TARGET_DELIM,
+                  regex_match=False):
     '''
     Check for a match in a dictionary using a delimiter character to denote
     levels of subdicts, and also allowing the delimiter character to be
@@ -1210,13 +1246,13 @@ def subdict_match(data, expr, delim=':', regex_match=False):
         else:
             return fnmatch.fnmatch(str(target).lower(), pattern.lower())
 
-    for idx in range(1, expr.count(delim) + 1):
-        splits = expr.split(delim)
-        key = delim.join(splits[:idx])
-        matchstr = delim.join(splits[idx:])
+    for idx in range(1, expr.count(delimiter) + 1):
+        splits = expr.split(delimiter)
+        key = delimiter.join(splits[:idx])
+        matchstr = delimiter.join(splits[idx:])
         log.debug('Attempting to match {0!r} in {1!r} using delimiter '
-                  '{2!r}'.format(matchstr, key, delim))
-        match = traverse_dict(data, key, {}, delim=delim)
+                  '{2!r}'.format(matchstr, key, delimiter))
+        match = traverse_dict_and_list(data, key, {}, delimiter=delimiter)
         if match == {}:
             continue
         if isinstance(match, dict):
@@ -1240,19 +1276,60 @@ def subdict_match(data, expr, delim=':', regex_match=False):
     return False
 
 
-def traverse_dict(data, key, default, delim=':'):
+def traverse_dict(data, key, default, delimiter=DEFAULT_TARGET_DELIM):
     '''
-    Traverse a dict using a colon-delimited (or otherwise delimited, using
-    the "delim" param) target string. The target 'foo:bar:baz' will return
-    data['foo']['bar']['baz'] if this value exists, and will otherwise
-    return the dict in the default argument.
+    Traverse a dict using a colon-delimited (or otherwise delimited, using the
+    'delimiter' param) target string. The target 'foo:bar:baz' will return
+    data['foo']['bar']['baz'] if this value exists, and will otherwise return
+    the dict in the default argument.
     '''
     try:
-        for each in key.split(delim):
+        for each in key.split(delimiter):
             data = data[each]
     except (KeyError, IndexError, TypeError):
         # Encountered a non-indexable value in the middle of traversing
         return default
+    return data
+
+
+def traverse_dict_and_list(data, key, default, delimiter=DEFAULT_TARGET_DELIM):
+    '''
+    Traverse a dict or list using a colon-delimited (or otherwise delimited,
+    using the 'delimiter' param) target string. The target 'foo:bar:0' will
+    return data['foo']['bar'][0] if this value exists, and will otherwise
+    return the dict in the default argument.
+    Function will automatically determine the target type.
+    The target 'foo:bar:0' will return data['foo']['bar'][0] if data like
+    {'foo':{'bar':['baz']}} , if data like {'foo':{'bar':{'0':'baz'}}}
+    then return data['foo']['bar']['0']
+    '''
+    for each in key.split(delimiter):
+        if isinstance(data, list):
+            try:
+                idx = int(each)
+            except ValueError:
+                embed_match = False
+                # Index was not numeric, lets look at any embedded dicts
+                for embedded in (x for x in data if isinstance(x, dict)):
+                    try:
+                        data = embedded[each]
+                        embed_match = True
+                        break
+                    except KeyError:
+                        pass
+                if not embed_match:
+                    # No embedded dicts matched, return the default
+                    return default
+            else:
+                try:
+                    data = data[idx]
+                except IndexError:
+                    return default
+        else:
+            try:
+                data = data[each]
+            except (KeyError, TypeError):
+                return default
     return data
 
 
@@ -1294,6 +1371,20 @@ def is_windows():
     return sys.platform.startswith('win')
 
 
+def sanitize_win_path_string(winpath):
+    '''
+    Remove illegal path characters for windows
+    '''
+    intab = '<>:|?*'
+    outtab = '_' * len(intab)
+    trantab = maketrans(intab, outtab)
+    if isinstance(winpath, str):
+        winpath = winpath.translate(trantab)
+    elif isinstance(winpath, unicode):
+        winpath = winpath.translate(dict((ord(c), u'_') for c in intab))
+    return winpath
+
+
 @real_memoize
 def is_linux():
     '''
@@ -1304,7 +1395,13 @@ def is_linux():
     # This is a hack.  If a proxy minion is started by other
     # means, e.g. a custom script that creates the minion objects
     # then this will fail.
-    if 'salt-proxy-minion' in main.__file__:
+    is_proxy = False
+    try:
+        if 'salt-proxy-minion' in main.__file__:
+            is_proxy = True
+    except AttributeError:
+        pass
+    if is_proxy:
         return False
     else:
         return sys.platform.startswith('linux')
@@ -1407,6 +1504,13 @@ def check_ipc_path_max_len(uri):
         )
 
 
+def gen_state_tag(low):
+    '''
+    Generate the running dict tag string from the low data structure
+    '''
+    return '{0[state]}_|-{0[__id__]}_|-{0[name]}_|-{0[fun]}'.format(low)
+
+
 def check_state_result(running):
     '''
     Check the total return value of the run and determine if the running
@@ -1418,20 +1522,26 @@ def check_state_result(running):
     if not running:
         return False
 
+    ret = True
     for state_result in running.itervalues():
         if not isinstance(state_result, dict):
             # return false when hosts return a list instead of a dict
-            return False
-
-        if 'result' in state_result:
-            if state_result.get('result', False) is False:
-                return False
-            return True
-
-        # Check nested state results
-        return check_state_result(state_result)
-
-    return True
+            ret = False
+        if ret:
+            result = state_result.get('result', _empty)
+            if result is False:
+                ret = False
+            # only override return value if we are not already failed
+            elif (
+                result is _empty
+                and isinstance(state_result, dict)
+                and ret
+            ):
+                ret = check_state_result(state_result)
+        # return as soon as we got a failure
+        if not ret:
+            break
+    return ret
 
 
 def test_mode(**kwargs):
@@ -1517,7 +1627,7 @@ def option(value, default='', opts=None, pillar=None):
         (pillar, value),
     )
     for source, val in sources:
-        out = traverse_dict(source, val, default)
+        out = traverse_dict_and_list(source, val, default)
         if out is not default:
             return out
     return default
@@ -1578,6 +1688,18 @@ def parse_docstring(docstring):
         return ret
 
 
+def print_cli(msg):
+    '''
+    Wrapper around print() that suppresses tracebacks on broken pipes (i.e.
+    when salt output is piped to less and less is stopped prematurely).
+    '''
+    try:
+        print(msg)
+    except IOError as exc:
+        if exc.errno != errno.EPIPE:
+            raise
+
+
 def safe_walk(top, topdown=True, onerror=None, followlinks=True, _seen=None):
     '''
     A clone of the python os.walk function with some checks for recursive
@@ -1629,7 +1751,7 @@ def safe_walk(top, topdown=True, onerror=None, followlinks=True, _seen=None):
         yield top, dirs, nondirs
 
 
-def get_hash(path, form='md5', chunk_size=4096):
+def get_hash(path, form='md5', chunk_size=65536):
     '''
     Get the hash sum of a file
 
@@ -1797,8 +1919,8 @@ def warn_until(version,
         raise RuntimeError(
             'The warning triggered on filename {filename!r}, line number '
             '{lineno}, is supposed to be shown until version '
-            '{until_version!r} is released. Current version is now '
-            '{salt_version!r}. Please remove the warning.'.format(
+            '{until_version} is released. Current version is now '
+            '{salt_version}. Please remove the warning.'.format(
                 filename=caller.filename,
                 lineno=caller.lineno,
                 until_version=version.formatted_version,
@@ -1987,21 +2109,6 @@ def argspec_report(functions, module=''):
             ret[fun]['kwargs'] = True if kwargs else None
 
     return ret
-
-
-def memoize(func):
-    '''
-    Deprecation warning wrapper since memoize is now on salt.utils.decorators
-    '''
-    warn_until(
-        'Helium',
-        'The \'memoize\' decorator was moved to \'salt.utils.decorators\', '
-        'please start importing it from there. This warning and wrapper '
-        'will be removed in Salt {version}.',
-        stacklevel=3
-
-    )
-    return real_memoize(func)
 
 
 def decode_list(data):
@@ -2209,3 +2316,181 @@ def get_gid_list(user=None, include_default=True):
         return []
     gid_list = [gid for (group, gid) in salt.utils.get_group_dict(user, include_default=include_default).items()]
     return sorted(set(gid_list))
+
+
+def trim_dict(
+        data,
+        max_dict_bytes,
+        percent=50.0,
+        stepper_size=10,
+        replace_with='VALUE_TRIMMED',
+        is_msgpacked=False):
+    '''
+    Takes a dictionary and iterates over its keys, looking for
+    large values and replacing them with a trimmed string.
+
+    If after the first pass over dictionary keys, the dictionary
+    is not sufficiently small, the stepper_size will be increased
+    and the dictionary will be rescanned. This allows for progressive
+    scanning, removing large items first and only making additional
+    passes for smaller items if necessary.
+
+    This function uses msgpack to calculate the size of the dictionary
+    in question. While this might seem like unnecessary overhead, a
+    data structure in python must be serialized in order for sys.getsizeof()
+    to accurately return the items referenced in the structure.
+
+    Ex:
+    >>> salt.utils.trim_dict({'a': 'b', 'c': 'x' * 10000}, 100)
+    {'a': 'b', 'c': 'VALUE_TRIMMED'}
+
+    To improve performance, it is adviseable to pass in msgpacked
+    data structures instead of raw dictionaries. If a msgpack
+    structure is passed in, it will not be unserialized unless
+    necessary.
+
+    If a msgpack is passed in, it will be repacked if necessary
+    before being returned.
+    '''
+    serializer = salt.payload.Serial({'serial': 'msgpack'})
+    if is_msgpacked:
+        dict_size = sys.getsizeof(data)
+    else:
+        dict_size = sys.getsizeof(serializer.dumps(data))
+    if dict_size > max_dict_bytes:
+        if is_msgpacked:
+            data = serializer.loads(data)
+        while True:
+            percent = float(percent)
+            max_val_size = float(max_dict_bytes * (percent / 100))
+            try:
+                for key in data:
+                    if sys.getsizeof(data[key]) > max_val_size:
+                        data[key] = replace_with
+                percent = percent - stepper_size
+                max_val_size = float(max_dict_bytes * (percent / 100))
+                cur_dict_size = sys.getsizeof(serializer.dumps(data))
+                if cur_dict_size < max_dict_bytes:
+                    if is_msgpacked:  # Repack it
+                        return serializer.dumps(data)
+                    else:
+                        return data
+                elif max_val_size == 0:
+                    if is_msgpacked:
+                        return serializer.dumps(data)
+                    else:
+                        return data
+            except ValueError:
+                pass
+        if is_msgpacked:
+            return serializer.dumps(data)
+        else:
+            return data
+    else:
+        return data
+
+
+def total_seconds(td):
+    '''
+    Takes a timedelta and returns the total number of seconds
+    represented by the object. Wrapper for the total_seconds()
+    method which does not exist in versions of Python < 2.7.
+    '''
+    return (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
+
+
+def import_json():
+    '''
+    Import a json module, starting with the quick ones and going down the list)
+    '''
+    for fast_json in ('ujson', 'yajl', 'json'):
+        try:
+            mod = __import__(fast_json)
+            log.info('loaded {0} json lib'.format(fast_json))
+            return mod
+        except ImportError:
+            continue
+
+
+def appendproctitle(name):
+    '''
+    Append "name" to the current process title
+    '''
+    if HAS_SETPROCTITLE:
+        setproctitle.setproctitle(setproctitle.getproctitle() + ' ' + name)
+
+
+def chugid(runas):
+    '''
+    Change the current process to belong to
+    the imputed user (and the groups he belongs to)
+    '''
+    uinfo = pwd.getpwnam(runas)
+    supgroups = []
+    supgroups_seen = set()
+
+    # The line below used to exclude the current user's primary gid.
+    # However, when root belongs to more than one group
+    # this causes root's primary group of '0' to be dropped from
+    # his grouplist.  On FreeBSD, at least, this makes some
+    # command executions fail with 'access denied'.
+    #
+    # The Python documentation says that os.setgroups sets only
+    # the supplemental groups for a running process.  On FreeBSD
+    # this does not appear to be strictly true.
+    group_list = get_group_dict(runas, include_default=True)
+    if sys.platform == 'darwin':
+        group_list = dict((k, v) for k, v in group_list.iteritems()
+                          if not k.startswith('_'))
+    for group_name in group_list:
+        gid = group_list[group_name]
+        if (gid not in supgroups_seen
+           and not supgroups_seen.add(gid)):
+            supgroups.append(gid)
+
+    if os.getgid() != uinfo.pw_gid:
+        try:
+            os.setgid(uinfo.pw_gid)
+        except OSError as err:
+            raise CommandExecutionError(
+                'Failed to change from gid {0} to {1}. Error: {2}'.format(
+                    os.getgid(), uinfo.pw_gid, err
+                )
+            )
+
+    # Set supplemental groups
+    if sorted(os.getgroups()) != sorted(supgroups):
+        try:
+            os.setgroups(supgroups)
+        except OSError as err:
+            raise CommandExecutionError(
+                'Failed to set supplemental groups to {0}. Error: {1}'.format(
+                    supgroups, err
+                )
+            )
+
+    if os.getuid() != uinfo.pw_uid:
+        try:
+            os.setuid(uinfo.pw_uid)
+        except OSError as err:
+            raise CommandExecutionError(
+                'Failed to change from uid {0} to {1}. Error: {2}'.format(
+                    os.getuid(), uinfo.pw_uid, err
+                )
+            )
+
+
+def chugid_and_umask(runas, umask):
+    '''
+    Helper method for for subprocess.Popen to initialise uid/gid and umask
+    for the new process.
+    '''
+    if runas is not None:
+        chugid(runas)
+    if umask is not None:
+        os.umask(umask)
+
+
+def rand_string(size=32):
+    key = os.urandom(size)
+    return key.encode('base64').replace('\n', '')

@@ -29,8 +29,19 @@ for this the :mod:`module.wait <salt.states.module.wait>` state can be used:
         - watch:
           - file: /etc/network/interfaces
 
-All arguments are passed through to the module function being executed.
-However, due to how the state system works, if a module function accepts an
+All arguments that the ``module`` state does not consume are passed through to
+the execution module function being executed:
+
+.. code-block:: yaml
+
+    fetch_out_of_band:
+      module.run:
+        - name: git.fetch
+        - cwd: /path/to/my/repo
+        - user: myuser
+        - opts: '--all'
+
+Due to how the state system works, if a module function accepts an
 argument called, ``name``, then ``m_name`` must be used to specify that
 argument, to avoid a collision with the ``name`` argument. For example:
 
@@ -40,6 +51,17 @@ argument, to avoid a collision with the ``name`` argument. For example:
       module.run:
         - name: service.disable
         - m_name: nfs
+
+Note that some modules read all or some of the arguments from a list of keyword
+arguments. For example:
+
+.. code-block:: yaml
+
+    mine.send:
+      module.run:
+        - func: network.ip_addrs
+        - kwargs:
+            interface: eth0
 '''
 # Import python libs
 import datetime
@@ -181,12 +203,12 @@ def run(name, **kwargs):
             mret = __salt__[name](*args, **nkwargs)
         else:
             mret = __salt__[name](*args)
-    except Exception:
-        ret['comment'] = 'Module function {0} threw an exception'.format(name)
+    except Exception as e:
+        ret['comment'] = 'Module function {0} threw an exception. Exception: {1}'.format(name, e)
         ret['result'] = False
         return ret
     else:
-        if mret:
+        if mret is not None:
             ret['changes']['ret'] = mret
 
     if 'returner' in kwargs:

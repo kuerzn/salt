@@ -71,17 +71,21 @@ class Master(parsers.MasterOptionParser):
                         os.path.join(self.config['pki_dir'], 'minions_pre'),
                         os.path.join(self.config['pki_dir'], 'minions_denied'),
                         os.path.join(self.config['pki_dir'],
+                                     'minions_autosign'),
+                        os.path.join(self.config['pki_dir'],
                                      'minions_rejected'),
                         self.config['cachedir'],
                         os.path.join(self.config['cachedir'], 'jobs'),
                         os.path.join(self.config['cachedir'], 'proc'),
                         self.config['sock_dir'],
                         self.config['token_dir'],
+                        self.config['sqlite_queue_dir'],
                     ]
                 if self.config.get('transport') == 'raet':
                     v_dirs.append(os.path.join(self.config['pki_dir'], 'accepted'))
                     v_dirs.append(os.path.join(self.config['pki_dir'], 'pending'))
                     v_dirs.append(os.path.join(self.config['pki_dir'], 'rejected'))
+                    v_dirs.append(os.path.join(self.config['cachedir'], 'raet'))
                 verify_env(
                     v_dirs,
                     self.config['user'],
@@ -132,12 +136,6 @@ class Master(parsers.MasterOptionParser):
         self.prepare()
         if check_user(self.config['user']):
             self.master.start()
-            #try:
-                #self.master.start()
-            #except MasterExit:
-                #self.shutdown()
-            #finally:
-                #sys.exit()
 
     def shutdown(self):
         '''
@@ -189,6 +187,7 @@ class Minion(parsers.MinionOptionParser):
                     v_dirs.append(os.path.join(self.config['pki_dir'], 'accepted'))
                     v_dirs.append(os.path.join(self.config['pki_dir'], 'pending'))
                     v_dirs.append(os.path.join(self.config['pki_dir'], 'rejected'))
+                    v_dirs.append(os.path.join(self.config['cachedir'], 'raet'))
                 verify_env(
                     v_dirs,
                     self.config['user'],
@@ -197,8 +196,8 @@ class Minion(parsers.MinionOptionParser):
                 )
                 logfile = self.config['log_file']
                 if logfile is not None and not logfile.startswith(('tcp://',
-                                                                   'udp://',
-                                                                   'file://')):
+                                                                'udp://',
+                                                                'file://')):
                     # Logfile is not using Syslog, verify
                     current_umask = os.umask(0077)
                     verify_files([logfile], self.config['user'])
@@ -224,11 +223,16 @@ class Minion(parsers.MinionOptionParser):
             self.daemonize_if_required()
             self.set_pidfile()
             if isinstance(self.config.get('master'), list):
-                self.minion = salt.minion.MultiMinion(self.config)
+                if self.config.get('master_type') == 'failover':
+                    self.minion = salt.minion.Minion(self.config)
+                else:
+                    self.minion = salt.minion.MultiMinion(self.config)
             else:
                 self.minion = salt.minion.Minion(self.config)
         else:
             import salt.daemons.flo
+            self.daemonize_if_required()
+            self.set_pidfile()
             self.minion = salt.daemons.flo.IofloMinion(self.config)
 
     def start(self):
@@ -241,8 +245,8 @@ class Minion(parsers.MinionOptionParser):
 
         NOTE: Run any required code before calling `super()`.
         '''
-        self.prepare()
         try:
+            self.prepare()
             if check_user(self.config['user']):
                 self.minion.tune_in()
         except (KeyboardInterrupt, SaltSystemExit) as exc:
@@ -416,7 +420,11 @@ class Syndic(parsers.SyndicOptionParser):
         # Late import so logging works correctly
         import salt.minion
         self.daemonize_if_required()
-        self.syndic = salt.minion.Syndic(self.config)
+        # if its a multisyndic, do so
+        if isinstance(self.config.get('master'), list):
+            self.syndic = salt.minion.MultiSyndic(self.config)
+        else:
+            self.syndic = salt.minion.Syndic(self.config)
         self.set_pidfile()
 
     def start(self):

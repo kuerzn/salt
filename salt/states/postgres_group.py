@@ -41,6 +41,7 @@ def present(name,
             login=None,
             replication=None,
             password=None,
+            refresh_password=None,
             groups=None,
             runas=None,
             user=None,
@@ -93,6 +94,18 @@ def present(name,
         encrypted to the previous
         format if it is not already done.
 
+    refresh_password
+        Password refresh flag
+
+        Boolean attribute to specify whether to password comparison check
+        should be performed.
+
+        If refresh_password is None or False, the password will be automatically
+        updated without extra password change check.
+
+        This behaviour makes it possible to execute in environments without
+        superuser access available, e.g. Amazon RDS for PostgreSQL
+
     groups
         A string of comma separated groups the group should be in
 
@@ -124,7 +137,7 @@ def present(name,
            'comment': 'Group {0} is already present'.format(name)}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -168,15 +181,11 @@ def present(name,
     # check if group exists
     mode = 'create'
     group_attr = __salt__['postgres.role_get'](
-        name, return_password=True, **db_args)
+        name, return_password=not refresh_password, **db_args)
     if group_attr is not None:
         mode = 'update'
 
     # The user is not present, make it!
-    if __opts__['test']:
-        ret['result'] = None
-        ret['comment'] = 'Group {0} is set to be {1}d'.format(name, mode)
-        return ret
     cret = None
     update = {}
     if mode == 'update':
@@ -204,9 +213,15 @@ def present(name,
             update['replication'] = replication
         if superuser is not None and group_attr['superuser'] != superuser:
             update['superuser'] = superuser
-        if password is not None and group_attr['password'] != password:
+        if password is not None and (refresh_password or group_attr['password'] != password):
             update['password'] = True
     if mode == 'create' or (mode == 'update' and update):
+        if __opts__['test']:
+            if update:
+                ret['changes'][name] = update
+            ret['result'] = None
+            ret['comment'] = 'Group {0} is set to be {1}d'.format(name, mode)
+            return ret
         cret = __salt__['postgres.group_{0}'.format(mode)](
             groupname=name,
             createdb=createdb,
@@ -276,7 +291,7 @@ def absent(name,
            'comment': ''}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True

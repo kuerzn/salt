@@ -3,7 +3,11 @@
 vSphere Cloud Module
 ====================
 
+.. versionadded:: 2014.7.0
+
 The vSphere cloud module is used to control access to VMWare vSphere.
+
+:depends:   - PySphere Python module
 
 Use of this module only requires a URL, username and password. Set up the cloud
 configuration at:
@@ -17,6 +21,15 @@ configuration at:
       user: myuser
       password: verybadpass
       url: 'https://10.1.1.1:443'
+
+Note: Your URL may or may not look like any of the following, depending on how
+your VMWare installation is configured:
+
+    10.1.1.1
+    10.1.1.1:443
+    https://10.1.1.1:443
+    https://10.1.1.1:443/sdk
+    10.1.1.1:443/sdk
 
 folder: Name of the folder that will contain the new VM. If not set, the VM will
         be added to the folder the original VM belongs to.
@@ -49,7 +62,7 @@ import time
 # Import salt libs
 import salt.utils.cloud
 import salt.utils.xmlutil
-from salt.cloud.exceptions import SaltCloudSystemExit
+from salt.exceptions import SaltCloudSystemExit
 
 # Import salt cloud libs
 import salt.config as config
@@ -152,7 +165,7 @@ def avail_images():
                 name = item.Val
             elif item.Name == 'config.template':
                 is_template = item.Val
-        if type(is_template) is bool and is_template is True:
+        if is_template is True:
             ret[name] = {'Name': name}
     return ret
 
@@ -222,10 +235,10 @@ def create(vm_):
             'Error creating {0} on vSphere\n\n'
             'The following exception was thrown by libcloud when trying to '
             'run the initial deployment: \n{1}'.format(
-                vm_['name'], exc.message
+                vm_['name'], str(exc)
             ),
             # Show the traceback if the debug logging level is enabled
-            exc_info=log.isEnabledFor(logging.DEBUG)
+            exc_info_on_loglevel=logging.DEBUG
         )
         return False
 
@@ -265,7 +278,6 @@ def create(vm_):
             'password': template_password,
             'script': deploy_script,
             'name': vm_['name'],
-            'deploy_command': '/tmp/deploy.sh',
             'start_action': __opts__['start_action'],
             'parallel': __opts__['parallel'],
             'sock_dir': __opts__['sock_dir'],
@@ -364,7 +376,7 @@ def create(vm_):
     return ret
 
 
-def list_nodes_full():
+def list_nodes_full(kwargs=None, call=None):  # pylint: disable=W0613
     '''
     Return a list of the VMs that are on the provider
     '''
@@ -393,7 +405,7 @@ def list_nodes_full():
     return ret
 
 
-def list_nodes_min():
+def list_nodes_min(kwargs=None, call=None):  # pylint: disable=W0613
     '''
     Return a list of the nodes in the provider, with no details
     '''
@@ -409,7 +421,7 @@ def list_nodes_min():
     return ret
 
 
-def list_nodes():
+def list_nodes(kwargs=None, call=None):  # pylint: disable=W0613
     '''
     Return a list of the VMs that are on the provider
     '''
@@ -471,6 +483,7 @@ def show_instance(name, call=None):
     ret = instance.get_properties()
     ret['status'] = instance.get_status()
     ret['tools_status'] = instance.get_tools_status()
+    salt.utils.cloud.cache_node(ret, __active_provider_name__, __opts__)
     return ret
 
 
@@ -478,7 +491,9 @@ def destroy(name, call=None):  # pylint: disable=W0613
     '''
     Destroy a node.
 
-    CLI Example::
+    CLI Example:
+
+    .. code-block:: bash
 
         salt-cloud --destroy mymachine
     '''
@@ -506,6 +521,8 @@ def destroy(name, call=None):  # pylint: disable=W0613
         {'name': name},
         transport=__opts__['transport']
     )
+    if __opts__.get('update_cachedir', False) is True:
+        salt.utils.cloud.delete_minion_cachedir(name, __active_provider_name__.split(':')[0], __opts__)
 
     return True
 
@@ -555,7 +572,7 @@ def list_hosts(kwargs=None, call=None):  # pylint: disable=W0613
 
 def list_datacenters(kwargs=None, call=None):  # pylint: disable=W0613
     '''
-    List the datacenters for this VMware environment
+    List the data centers for this VMware environment
     '''
     if call != 'function':
         log.error(

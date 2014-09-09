@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 '''
-Salt Key makes use of the outputter system to format information sent to the
-``salt-key`` command. This outputter is geared towards ingesting very specific
-data and should only be used with the salt-key command.
+Display salt-key output
+=======================
+
+The ``salt-key`` command makes use of this outputter to format its output.
 '''
 
 # Import salt libs
 import salt.utils
+import salt.output
 
 
 def output(data):
@@ -15,6 +17,7 @@ def output(data):
     print the structure.
     '''
     color = salt.utils.get_colors(__opts__.get('color'))
+    strip_colors = __opts__.get('strip_colors', True)
     if __opts__['transport'] == 'zeromq':
         acc = 'minions'
         pend = 'minions_pre'
@@ -29,33 +32,36 @@ def output(data):
             rej: color['BLUE'],
             'local': color['PURPLE']}
 
-    trans = {pend: '{0}Unaccepted Keys:{1}'.format(
+    trans = {pend: u'{0}Unaccepted Keys:{1}'.format(
                                 color['LIGHT_RED'],
                                 color['ENDC']),
-             acc: '{0}Accepted Keys:{1}'.format(
+             acc: u'{0}Accepted Keys:{1}'.format(
                                 color['LIGHT_GREEN'],
                                 color['ENDC']),
-             rej: '{0}Rejected Keys:{1}'.format(
+             rej: u'{0}Rejected Keys:{1}'.format(
                                 color['LIGHT_BLUE'],
                                 color['ENDC']),
-             'local': '{0}Local Keys:{1}'.format(
+             'local': u'{0}Local Keys:{1}'.format(
                                 color['LIGHT_PURPLE'],
                                 color['ENDC'])}
 
     ret = ''
 
     for status in sorted(data):
-        ret += '{0}\n'.format(trans[status])
+        ret += u'{0}\n'.format(trans[status])
         for key in data[status]:
+            skey = key
+            if strip_colors:
+                skey = salt.output.strip_esc_sequence(key)
             if isinstance(data[status], list):
-                ret += '{0}{1}{2}\n'.format(
+                ret += u'{0}{1}{2}\n'.format(
                         cmap[status],
-                        key,
+                        skey,
                         color['ENDC'])
             if isinstance(data[status], dict):
-                ret += '{0}{1}:  {2}{3}\n'.format(
+                ret += u'{0}{1}:  {2}{3}\n'.format(
                         cmap[status],
-                        key,
+                        skey,
                         data[status][key],
                         color['ENDC'])
     return ret

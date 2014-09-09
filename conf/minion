@@ -87,6 +87,10 @@
 # to False
 #color: True
 
+# Do not strip off the colored output from nested results and states outputs
+# (true by default)
+# strip_colors: false
+
 # Backup files that are replaced by file.managed and file.recurse under
 # 'cachedir'/file_backups relative to their original location and appended
 # with a timestamp. The only valid setting is "minion". Disabled by default.
@@ -127,10 +131,31 @@
 # in seconds, for each individual attempt. After this timeout expires, the minion
 # will wait for acceptance_wait_time seconds before trying again.
 # Unless your master is under unusually heavy load, this should be left at the default.
-#auth_timeout: 3
+#auth_timeout: 60
 
+# Number of consecutive SaltReqTimeoutError that are acceptable when trying to authenticate.
+#auth_tries: 7
 
-# If you don't have any problems with syn-floods, dont bother with the
+# If authentication fails due to SaltReqTimeoutError during a ping_interval,
+# cause sub minion process to restart.
+#auth_safemode: False
+
+# Ping Master to ensure connection is alive (minutes).
+# TODO: perhaps could update the scheduler to raise Exception in main thread after /mine_interval (60 minutes)/ fails
+#ping_interval: 90
+
+# To auto recover minions if master changes IP address (DDNS)
+#
+#    auth_tries: 10
+#    auth_safemode: False
+#    ping_interval: 90
+#    restart_on_error: True
+#
+# Minions won't know master is missing until a ping fails.  After the ping fail,
+# the minion will attempt authentication and likely fails out and cause a restart.
+# When the minion restarts it will resolve the masters IP and attempt to reconnect.
+
+# If you don't have any problems with syn-floods, don't bother with the
 # three recon_* settings described below, just leave the defaults!
 #
 # The ZeroMQ pull-socket that binds to the masters publishing interface tries
@@ -141,7 +166,7 @@
 # can be used.
 #
 # recon_default: the interval in milliseconds that the socket should wait before
-#                trying to reconnect to the master (100ms = 1 second)
+#                trying to reconnect to the master (1000ms = 1 second)
 #
 # recon_max: the maximum time a socket should wait. each interval the time to wait
 #            is calculated by doubling the previous time. if recon_max is reached,
@@ -160,7 +185,7 @@
 #                  and recon_max value kind of defeats the purpose of being able to
 #                  change these settings. If all minions have the same values and your
 #                  setup is quite large (several thousand minions), they will still
-#                  flood the master. The desired behaviour is to have timeframe within
+#                  flood the master. The desired behavior is to have timeframe within
 #                  all minions try to reconnect.
 
 # Example on how to use these settings:
@@ -221,12 +246,6 @@
 # is not enabled.
 # grains_cache_expiration: 300
 
-
-# When healing, a dns_check is run. This is to make sure that the originally
-# resolved dns has not changed. If this is something that does not happen in
-# your environment, set this value to False.
-#dns_check: True
-
 # Windows platforms lack posix IPC and must rely on slower TCP based inter-
 # process communications. Set ipc_mode to 'tcp' on such systems
 #ipc_mode: ipc
@@ -234,6 +253,11 @@
 # Overwrite the default tcp ports used by the minion when in tcp mode
 #tcp_pub_port: 4510
 #tcp_pull_port: 4511
+
+# Passing very large events can cause the minion to consume large amounts of
+# memory. This value tunes the maximum size of a message allowed onto the
+# minion event bus. The value is expressed in bytes.
+#max_event_size: 1048576
 
 # The minion can include configuration from other files. To enable this,
 # pass a list of paths to this option. The paths can be either relative or
@@ -266,6 +290,7 @@
 #returner_dirs: []
 #states_dirs: []
 #render_dirs: []
+#utils_dirs: []
 #
 # A module provider can be statically overwritten or extended for the minion
 # via the providers option, in this case the default module will be
@@ -422,6 +447,11 @@
 # output for each changed state if set to 'full', but if set to 'terse'
 # the output will be shortened to a single line.
 #state_output: full
+#
+# The state_output_diff setting changes whether or not the output from
+# successful states is returned. Useful when even the terse output of these
+# states is cluttering the logs. Set it to True to ignore them.
+#state_output_diff: False
 #
 # Fingerprint of the master public key to double verify the master is valid,
 # the master fingerprint can be found by running "salt-key -F master" on the

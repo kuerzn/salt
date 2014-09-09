@@ -49,22 +49,25 @@ Google Compute Engine Setup
    To set up authorization, navigate to *APIs & auth* section and then the
    *Credentials* link and click the *CREATE NEW CLIENT ID* button. Select
    *Service Account* and click the *Create Client ID* button. This will
-   prompt you to save a private key file.  Look for a new *Service Account*
-   section in the page and record the generated email address for the
-   matching key/fingerprint.  The email address will be used in the
-   ``service_account_email_address`` of your ``/etc/salt/cloud``
-   file.
+   automatically download a ``.json`` file, which should be ignored. Look for
+   a new *Service Account* section in the page and record the generated email
+   address for the matching key/fingerprint. The email address will be used
+   in the ``service_account_email_address`` of the ``/etc/salt/cloud`` file.
 
 #. Key Format
 
-   You will need to convert the private key to a format compatible with
-   libcloud.  The original Google-generated private key was encrypted using
-   *notasecret* as a passphrase.  Use the following command and record the
-   location of the converted private key and record the location for use
-   in the ``service_account_private_key`` of your ``/etc/salt/cloud`` file::
+   In the new *Service Account* section, click *Generate new P12 key*, which
+   will automatically download a ``.p12`` private key file. The ``.p12``
+   private key needs to be converted to a format compatible with libcloud.
+   This new Google-generated private key was encrypted using *notasecret* as
+   a passphrase. Use the following command and record the location of the
+   converted private key and record the location for use in the
+   ``service_account_private_key`` of the ``/etc/salt/cloud`` file:
 
-     openssl pkcs12 -in ORIG.pkey -passin pass:notasecret \
-     -nodes -nocerts | openssl rsa -out NEW.pem
+   .. code-block:: bash
+
+       openssl pkcs12 -in ORIG.p12 -passin pass:notasecret \
+       -nodes -nocerts | openssl rsa -out NEW.pem
 
 
 
@@ -81,7 +84,7 @@ Set up the cloud config at ``/etc/salt/cloud``:
       gce-config:
         # Set up the Project name and Service Account authorization
         #
-        project: "your_project_name"
+        project: "your-project-id"
         service_account_email_address: "123-a5gt@developer.gserviceaccount.com"
         service_account_private_key: "/path/to/your/NEW.pem"
 
@@ -98,6 +101,10 @@ Set up the cloud config at ``/etc/salt/cloud``:
 
         provider: gce
 
+.. note::
+
+    The value provided for ``project`` must not contain underscores or spaces and
+    is labeled as "Project ID" on the Google Developers Console.
 
 
 Cloud Profiles
@@ -203,14 +210,32 @@ typically also include a hard-coded default.
 
 
 GCE instances do not allow remote access to the root user by default.
-Instead, another user must be used to run the deploy script using sudo.
+Instead, another user must be used to run the deploy script using sudo. 
+Append something like this to ``/etc/salt/cloud.profiles``:
 
 .. code-block:: yaml
 
-    my-gce-config:
-      # Configure which user to use to run the deploy script
-      ssh_username: user
-      ssh_keyfile: /home/user/.ssh/google_compute_engine
+  all_settings:
+      ...
+  
+      # SSH to GCE instances as gceuser
+      ssh_username: gceuser
+
+      # Use the local private SSH key file located here
+      ssh_keyfile: /etc/cloud/google_compute_engine
+
+If you have not already used this SSH key to login to instances in this
+GCE project you will also need to add the public key to your projects
+metadata at https://cloud.google.com/console. You could also add it via
+the metadata setting too:
+
+.. code-block:: yaml
+
+  all_settings:
+      ...
+
+      metadata: '{"one": "1", "2": "two",
+                  "sshKeys": "gceuser:ssh-rsa <Your SSH Public Key> gceuser@host"}'
 
 
 Single instance details
@@ -311,7 +336,7 @@ a function or an action.
 Create snapshot
 ---------------
 You can take a snapshot of an existing disk's content. The snapshot can then
-in turn be used to create other persistend disks. Note that to prevent data
+in turn be used to create other persistent disks. Note that to prevent data
 corruption, it is strongly suggested that you unmount the disk prior to
 taking a snapshot. You must name the snapshot and provide the name of the
 disk.
@@ -443,7 +468,7 @@ Load-balancer
 -------------
 When creating a new load-balancer, it requires a name, region, port range,
 and list of members. There are other optional parameters for protocol,
-and list of healtch checks. Deleting or showing details about the LB only
+and list of health checks. Deleting or showing details about the LB only
 requires the name.
 
 .. code-block:: bash

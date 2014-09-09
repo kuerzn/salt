@@ -77,7 +77,9 @@ As with any change to resource limits, it is best to stay logged into your
 current shell and open another shell to run ``ulimit -n`` again and verify that
 the changes were applied correctly. Additionally, if your master is running
 upstart, it may be necessary to specify the ``nofile`` limit in
-``/etc/default/salt-master`` if upstart isn't respecting your resource limits::
+``/etc/default/salt-master`` if upstart isn't respecting your resource limits:
+
+.. code-block:: text
 
     limit nofile 4096 4096
 
@@ -196,8 +198,22 @@ Passing the -c Option to Salt Returns a Permissions Error
 =========================================================
 
 Using the ``-c`` option with the Salt command modifies the configuration
-directory. When the configuratio file is read it will still base data off of
+directory. When the configuration file is read it will still base data off of
 the ``root_dir`` setting. This can result in unintended behavior if you are
 expecting files such as ``/etc/salt/pki`` to be pulled from the location
 specified with ``-c``. Modify the ``root_dir`` setting to address this
 behavior.
+
+Salt Master Doesn't Return Anything While Running jobs
+======================================================
+
+When a command being run via Salt takes a very long time to return
+(package installations, certain scripts, etc.) the master may drop you back
+to the shell. In most situations the job is still running but Salt has
+exceeded the set timeout before returning. Querying the job queue will 
+provide the data of the job but is inconvenient. This can be resolved by
+either manually using the ``-t`` option to set a longer timeout when running
+commands (by default it is 5 seconds) or by modifying the master
+configuration file: ``/etc/salt/master`` and setting the ``timeout`` value to
+change the default timeout for all commands, and then restarting the
+salt-master service.

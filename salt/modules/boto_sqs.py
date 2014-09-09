@@ -2,7 +2,7 @@
 '''
 Connection module for Amazon SQS
 
-.. versionadded:: Helium
+.. versionadded:: 2014.7.0
 
 :configuration: This module accepts explicit sqs credentials but can also utilize
     IAM roles assigned to the instance trough Instance Profiles. Dynamic
@@ -36,6 +36,7 @@ Connection module for Amazon SQS
 
 # Import Python libs
 import logging
+import json
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +156,8 @@ def set_attributes(name, attributes, region=None, key=None, keyid=None,
     if not queue_obj:
         log.error('Queue {0} does not exist.'.format(name))
         ret = False
+    if isinstance(attributes, string_types):
+        attributes = json.loads(attributes)
     for attr, val in attributes.iteritems():
         attr_set = queue_obj.set_attribute(attr, val)
         if not attr_set:
@@ -178,7 +181,7 @@ def _get_conn(region, key, keyid, profile):
             _profile = profile
         key = _profile.get('key', None)
         keyid = _profile.get('keyid', None)
-        region = _profile.get('keyid', None)
+        region = _profile.get('region', None)
 
     if not region and __salt__['config.option']('sqs.region'):
         region = __salt__['config.option']('sqs.region')
